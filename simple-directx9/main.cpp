@@ -65,7 +65,7 @@ int WINAPI _tWinMain(_In_ HINSTANCE hInstance,
     assert(atom != 0);
 
     RECT rect;
-    SetRect(&rect, 0, 0, 640, 480);
+    SetRect(&rect, 0, 0, 1600, 900);
     AdjustWindowRect(&rect, WS_OVERLAPPEDWINDOW, FALSE);
     rect.right = rect.right - rect.left;
     rect.bottom = rect.bottom - rect.top;
@@ -176,25 +176,25 @@ void InitD3D(HWND hWnd)
     assert(SUCCEEDED(hr));
 
     // オフスクリーン用テクスチャ＋デプス
-    D3DXCreateTexture(g_pd3dDevice, 640, 480, 1,
+    D3DXCreateTexture(g_pd3dDevice, 1600, 900, 1,
                       D3DUSAGE_RENDERTARGET,
                       D3DFMT_A8R8G8B8,
                       D3DPOOL_DEFAULT,
                       &g_pSceneTex);
     g_pSceneTex->GetSurfaceLevel(0, &g_pSceneSurface);
 
-    g_pd3dDevice->CreateDepthStencilSurface(640, 480,
+    g_pd3dDevice->CreateDepthStencilSurface(1600, 900,
                                             D3DFMT_D16, D3DMULTISAMPLE_NONE, 0, TRUE, &g_pSceneDepth, NULL);
 
     // ブラー用一時テクスチャ＋デプス
-    D3DXCreateTexture(g_pd3dDevice, 640, 480, 1,
+    D3DXCreateTexture(g_pd3dDevice, 1600, 900, 1,
                       D3DUSAGE_RENDERTARGET,
                       D3DFMT_A8R8G8B8,
                       D3DPOOL_DEFAULT,
                       &g_pTempTex);
     g_pTempTex->GetSurfaceLevel(0, &g_pTempSurface);
 
-    g_pd3dDevice->CreateDepthStencilSurface(640, 480,
+    g_pd3dDevice->CreateDepthStencilSurface(1600, 900,
                                             D3DFMT_D16, D3DMULTISAMPLE_NONE, 0, TRUE, &g_pTempDepth, NULL);
 }
 
@@ -227,7 +227,7 @@ void RenderSceneToTexture()
 
     g_pd3dDevice->Clear(0, NULL,
                         D3DCLEAR_TARGET | D3DCLEAR_ZBUFFER,
-                        D3DCOLOR_XRGB(50, 50, 50), 1.0f, 0);
+                        D3DCOLOR_XRGB(255, 255, 255), 1.0f, 0);
     g_pd3dDevice->BeginScene();
 
     static float f = 0.0f;
@@ -239,7 +239,7 @@ void RenderSceneToTexture()
     D3DXMatrixLookAtLH(&View, &eye, &at, &up);
     D3DXMatrixPerspectiveFovLH(&Proj,
                                D3DXToRadian(45),
-                               640.0f / 480.0f,
+                               1600.0f / 900.0f,
                                1.0f, 100.0f);
     D3DXMatrixIdentity(&World);
     mat = World * View * Proj;
@@ -266,14 +266,14 @@ void DrawFullscreenQuad(LPDIRECT3DTEXTURE9 tex, const char* tech)
     g_pEffect->SetTechnique(tech);
     g_pEffect->SetTexture("g_SrcTex", tex);
 
-    float texelSize[2] = { 1.0f / 640.0f, 1.0f / 480.0f };
+    float texelSize[2] = { 1.0f / 1600.0f, 1.0f / 900.0f };
     g_pEffect->SetFloatArray("g_TexelSize", texelSize, 2);
 
     ScreenVertex quad[4] = {
         { -0.5f, -0.5f, 0, 1, 0, 0 },
-        { 639.5f, -0.5f, 0, 1, 1, 0 },
-        { -0.5f, 479.5f, 0, 1, 0, 1 },
-        { 639.5f, 479.5f, 0, 1, 1, 1 }
+        { 1599.5f, -0.5f, 0, 1, 1, 0 },
+        { -0.5f, 899.5f, 0, 1, 0, 1 },
+        { 1599.5f, 899.5f, 0, 1, 1, 1 }
     };
 
     g_pd3dDevice->SetRenderState(D3DRS_ZENABLE, FALSE);
