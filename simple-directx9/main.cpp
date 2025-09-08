@@ -37,8 +37,8 @@ LPDIRECT3DTEXTURE9 g_pTempTex = NULL;
 LPDIRECT3DSURFACE9 g_pTempSurface = NULL;
 LPDIRECT3DSURFACE9 g_pTempDepth = NULL;
 
-const int WINDOW_SIZE_W = WINDOW_SIZE_W;
-const int WINDOW_SIZE_H = WINDOW_SIZE_H;
+const int WINDOW_SIZE_W = 1600;
+const int WINDOW_SIZE_H = 900;
 
 struct ScreenVertex {
     float x, y, z, rhw;
@@ -296,7 +296,7 @@ void RenderSceneToTexture()
     D3DXMatrixLookAtLH(&View, &eye, &at, &up);
     D3DXMatrixPerspectiveFovLH(&Proj,
                                D3DXToRadian(45),
-                               WINDOW_SIZE_W / WINDOW_SIZE_H,
+                               (float)WINDOW_SIZE_W / WINDOW_SIZE_H,
                                1.0f,
                                100.0f);
 
