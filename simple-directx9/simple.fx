@@ -56,19 +56,6 @@ sampler SrcSampler = sampler_state
     MagFilter = LINEAR;
 };
 
-float4 CopyPS(float2 texCoord : TEXCOORD0) : COLOR
-{
-    return tex2D(SrcSampler, texCoord);
-}
-
-technique Copy
-{
-    pass P0
-    {
-        PixelShader = compile ps_3_0 CopyPS();
-    }
-}
-
 float4 GaussianBlurH(float2 texCoord : TEXCOORD0) : COLOR
 {
     float4 c = 0;

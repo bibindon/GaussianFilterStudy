@@ -16,7 +16,6 @@
 
 LPDIRECT3D9 g_pD3D = NULL;
 LPDIRECT3DDEVICE9 g_pd3dDevice = NULL;
-LPD3DXFONT g_pFont = NULL;
 LPD3DXMESH g_pMesh = NULL;
 std::vector<D3DMATERIAL9> g_pMaterials;
 std::vector<LPDIRECT3DTEXTURE9> g_pTextures;
@@ -38,6 +37,9 @@ LPDIRECT3DTEXTURE9 g_pTempTex = NULL;
 LPDIRECT3DSURFACE9 g_pTempSurface = NULL;
 LPDIRECT3DSURFACE9 g_pTempDepth = NULL;
 
+const int WINDOW_SIZE_W = WINDOW_SIZE_W;
+const int WINDOW_SIZE_H = WINDOW_SIZE_H;
+
 struct ScreenVertex {
     float x, y, z, rhw;
     float u, v;
@@ -47,6 +49,9 @@ struct ScreenVertex {
 static void InitD3D(HWND hWnd);
 static void Cleanup();
 static void Render();
+static void DrawFullscreenQuad(LPDIRECT3DTEXTURE9 tex, const char* tech);
+static void RenderSceneToTexture();
+
 LRESULT WINAPI MsgProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam);
 
 extern int WINAPI _tWinMain(_In_ HINSTANCE hInstance,
@@ -70,7 +75,7 @@ int WINAPI _tWinMain(_In_ HINSTANCE hInstance,
     assert(atom != 0);
 
     RECT rect;
-    SetRect(&rect, 0, 0, 1600, 900);
+    SetRect(&rect, 0, 0, WINDOW_SIZE_W, WINDOW_SIZE_H);
     AdjustWindowRect(&rect, WS_OVERLAPPEDWINDOW, FALSE);
     rect.right = rect.right - rect.left;
     rect.bottom = rect.bottom - rect.top;
@@ -135,11 +140,6 @@ void InitD3D(HWND hWnd)
     g_pd3dDevice->GetRenderTarget(0, &g_pBackBuffer);
     g_pd3dDevice->GetDepthStencilSurface(&g_pDepthBuffer);
 
-    D3DXCreateFont(g_pd3dDevice, 20, 0, FW_BOLD, 1, FALSE,
-                   DEFAULT_CHARSET, OUT_TT_ONLY_PRECIS,
-                   ANTIALIASED_QUALITY, FF_DONTCARE,
-                   _T("Arial"), &g_pFont);
-
     // Mesh 読み込み
     LPD3DXBUFFER pMtrlBuffer = NULL;
     hr = D3DXLoadMeshFromX(_T("cube.x"),
@@ -181,34 +181,57 @@ void InitD3D(HWND hWnd)
     assert(SUCCEEDED(hr));
 
     // オフスクリーン用テクスチャ＋デプス
-    D3DXCreateTexture(g_pd3dDevice, 1600, 900, 1,
+    D3DXCreateTexture(g_pd3dDevice,
+                      WINDOW_SIZE_W,
+                      WINDOW_SIZE_H,
+                      1,
                       D3DUSAGE_RENDERTARGET,
                       D3DFMT_A8R8G8B8,
                       D3DPOOL_DEFAULT,
                       &g_pSceneTex);
+
     g_pSceneTex->GetSurfaceLevel(0, &g_pSceneSurface);
 
-    g_pd3dDevice->CreateDepthStencilSurface(1600, 900,
-                                            D3DFMT_D16, D3DMULTISAMPLE_NONE, 0, TRUE, &g_pSceneDepth, NULL);
+    g_pd3dDevice->CreateDepthStencilSurface(WINDOW_SIZE_W,
+                                            WINDOW_SIZE_H,
+                                            D3DFMT_D16,
+                                            D3DMULTISAMPLE_NONE,
+                                            0,
+                                            TRUE,
+                                            &g_pSceneDepth,
+                                            NULL);
 
     // ブラー用一時テクスチャ＋デプス
-    D3DXCreateTexture(g_pd3dDevice, 1600, 900, 1,
+    D3DXCreateTexture(g_pd3dDevice,
+                      WINDOW_SIZE_W,
+                      WINDOW_SIZE_H,
+                      1,
                       D3DUSAGE_RENDERTARGET,
                       D3DFMT_A8R8G8B8,
                       D3DPOOL_DEFAULT,
                       &g_pTempTex);
+
     g_pTempTex->GetSurfaceLevel(0, &g_pTempSurface);
 
-    g_pd3dDevice->CreateDepthStencilSurface(1600, 900,
-                                            D3DFMT_D16, D3DMULTISAMPLE_NONE, 0, TRUE, &g_pTempDepth, NULL);
+    g_pd3dDevice->CreateDepthStencilSurface(WINDOW_SIZE_W,
+                                            WINDOW_SIZE_H,
+                                            D3DFMT_D16,
+                                            D3DMULTISAMPLE_NONE,
+                                            0,
+                                            TRUE,
+                                            &g_pTempDepth,
+                                            NULL);
 }
 
 void Cleanup()
 {
-    for (auto& t : g_pTextures) SAFE_RELEASE(t);
+    for (auto& t : g_pTextures)
+    {
+        SAFE_RELEASE(t);
+    }
+
     SAFE_RELEASE(g_pMesh);
     SAFE_RELEASE(g_pEffect);
-    SAFE_RELEASE(g_pFont);
 
     SAFE_RELEASE(g_pSceneSurface);
     SAFE_RELEASE(g_pSceneTex);
@@ -225,14 +248,43 @@ void Cleanup()
     SAFE_RELEASE(g_pD3D);
 }
 
+void Render()
+{
+    // 1. シーンをオフスクリーンに描画
+    RenderSceneToTexture();
+
+    // 2. 横方向ブラー → g_pTempTex
+    g_pd3dDevice->SetRenderTarget(0, g_pTempSurface);
+    g_pd3dDevice->SetDepthStencilSurface(g_pTempDepth);
+    g_pd3dDevice->Clear(0, NULL, D3DCLEAR_TARGET, 0, 1.0f, 0);
+    g_pd3dDevice->BeginScene();
+    DrawFullscreenQuad(g_pSceneTex, "GaussianH");
+    g_pd3dDevice->EndScene();
+
+    // 3. 縦方向ブラー → バックバッファ
+    g_pd3dDevice->SetRenderTarget(0, g_pBackBuffer);
+    g_pd3dDevice->SetDepthStencilSurface(g_pDepthBuffer);
+    g_pd3dDevice->Clear(0, NULL, D3DCLEAR_TARGET, 0, 1.0f, 0);
+    g_pd3dDevice->BeginScene();
+    DrawFullscreenQuad(g_pTempTex, "GaussianV");
+
+    g_pd3dDevice->EndScene();
+
+    g_pd3dDevice->Present(NULL, NULL, NULL, NULL);
+}
+
 void RenderSceneToTexture()
 {
     g_pd3dDevice->SetRenderTarget(0, g_pSceneSurface);
     g_pd3dDevice->SetDepthStencilSurface(g_pSceneDepth);
 
-    g_pd3dDevice->Clear(0, NULL,
+    g_pd3dDevice->Clear(0,
+                        NULL,
                         D3DCLEAR_TARGET | D3DCLEAR_ZBUFFER,
-                        D3DCOLOR_XRGB(100, 100, 100), 1.0f, 0);
+                        D3DCOLOR_XRGB(100, 100, 100),
+                        1.0f,
+                        0);
+
     g_pd3dDevice->BeginScene();
 
     static float f = 0.0f;
@@ -244,8 +296,10 @@ void RenderSceneToTexture()
     D3DXMatrixLookAtLH(&View, &eye, &at, &up);
     D3DXMatrixPerspectiveFovLH(&Proj,
                                D3DXToRadian(45),
-                               1600.0f / 900.0f,
-                               1.0f, 100.0f);
+                               WINDOW_SIZE_W / WINDOW_SIZE_H,
+                               1.0f,
+                               100.0f);
+
     D3DXMatrixIdentity(&World);
     mat = World * View * Proj;
     g_pEffect->SetMatrix("g_matWorldViewProj", &mat);
@@ -271,14 +325,14 @@ void DrawFullscreenQuad(LPDIRECT3DTEXTURE9 tex, const char* tech)
     g_pEffect->SetTechnique(tech);
     g_pEffect->SetTexture("g_SrcTex", tex);
 
-    float texelSize[2] = { 1.0f / 1600.0f, 1.0f / 900.0f };
+    float texelSize[2] = { 1.0f / WINDOW_SIZE_W, 1.0f / WINDOW_SIZE_H };
     g_pEffect->SetFloatArray("g_TexelSize", texelSize, 2);
 
     ScreenVertex quad[4] = {
-        { -0.5f, -0.5f, 0, 1, 0, 0 },
-        { 1599.5f, -0.5f, 0, 1, 1, 0 },
-        { -0.5f, 899.5f, 0, 1, 0, 1 },
-        { 1599.5f, 899.5f, 0, 1, 1, 1 }
+        {                -0.5f,                -0.5f, 0, 1, 0, 0 },
+        { WINDOW_SIZE_W - 0.5f,                -0.5f, 0, 1, 1, 0 },
+        {                -0.5f, WINDOW_SIZE_H - 0.5f, 0, 1, 0, 1 },
+        { WINDOW_SIZE_W - 0.5f, WINDOW_SIZE_H - 0.5f, 0, 1, 1, 1 }
     };
 
     g_pd3dDevice->SetRenderState(D3DRS_ZENABLE, FALSE);
@@ -291,37 +345,14 @@ void DrawFullscreenQuad(LPDIRECT3DTEXTURE9 tex, const char* tech)
     g_pd3dDevice->SetRenderState(D3DRS_ZENABLE, TRUE);
 }
 
-void Render()
-{
-    // 1. シーンをオフスクリーンに描画
-    RenderSceneToTexture();
-
-    // 2. 横方向ブラー → g_pTempTex
-    g_pd3dDevice->SetRenderTarget(0, g_pTempSurface);
-    g_pd3dDevice->SetDepthStencilSurface(g_pTempDepth);
-    g_pd3dDevice->Clear(0, NULL, D3DCLEAR_TARGET, 0, 1.0f, 0);
-    g_pd3dDevice->BeginScene();
-    DrawFullscreenQuad(g_pSceneTex, "GaussianH");
-    g_pd3dDevice->EndScene();
-
-    // 3. 縦方向ブラー → バックバッファ
-    g_pd3dDevice->SetRenderTarget(0, g_pBackBuffer);
-    g_pd3dDevice->SetDepthStencilSurface(g_pDepthBuffer);
-    g_pd3dDevice->Clear(0, NULL, D3DCLEAR_TARGET, 0, 1.0f, 0);
-    g_pd3dDevice->BeginScene();
-    // ★まずは Copy で確認、その後 GaussianV に差し替え
-    DrawFullscreenQuad(g_pTempTex, "GaussianV");
-    g_pd3dDevice->EndScene();
-
-    g_pd3dDevice->Present(NULL, NULL, NULL, NULL);
-}
-
 LRESULT WINAPI MsgProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam)
 {
-    if (msg == WM_DESTROY) {
+    if (msg == WM_DESTROY)
+    {
         PostQuitMessage(0);
         g_bClose = true;
         return 0;
     }
+
     return DefWindowProc(hWnd, msg, wParam, lParam);
 }
