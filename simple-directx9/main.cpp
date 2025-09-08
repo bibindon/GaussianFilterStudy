@@ -227,13 +227,13 @@ void RenderSceneToTexture()
 
     g_pd3dDevice->Clear(0, NULL,
                         D3DCLEAR_TARGET | D3DCLEAR_ZBUFFER,
-                        D3DCOLOR_XRGB(255, 255, 255), 1.0f, 0);
+                        D3DCOLOR_XRGB(100, 100, 100), 1.0f, 0);
     g_pd3dDevice->BeginScene();
 
     static float f = 0.0f;
     f += 0.02f;
     D3DXMATRIX View, Proj, World, mat;
-    D3DXVECTOR3 eye(10 * sinf(f), 5, -10 * cosf(f));
+    D3DXVECTOR3 eye(6 * sinf(f), 3, -6 * cosf(f));
     D3DXVECTOR3 at(0, 0, 0);
     D3DXVECTOR3 up(0, 1, 0);
     D3DXMatrixLookAtLH(&View, &eye, &at, &up);

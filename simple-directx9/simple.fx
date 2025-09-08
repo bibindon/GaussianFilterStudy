@@ -117,6 +117,8 @@ sampler textureSampler = sampler_state
     Texture = (texture1);
     MinFilter = LINEAR;
     MagFilter = LINEAR;
+    AddressU = CLAMP;
+    AddressV = CLAMP;
 };
 
 // ============================
@@ -154,7 +156,9 @@ technique Technique1
 }
 
 // ============================
-// ƒ|ƒXƒgƒGƒtƒFƒNƒg—pi201~201 ”ÍˆÍ‚ğ25tapj
+// ƒ|ƒXƒgƒGƒtƒFƒNƒgi201~201, tap=25, step=8j
+// ƒTƒ“ƒvƒ‹: 0, }8, }16, c, }96
+// ƒĞ=40, —£U˜a(ŠÔˆø‚«)‚Å³‹K‰»Ï‚İi1D˜a=1j
 // ============================
 float2 g_TexelSize;
 texture g_SrcTex;
@@ -163,25 +167,26 @@ sampler SrcSampler = sampler_state
     Texture = <g_SrcTex>;
     MinFilter = LINEAR;
     MagFilter = LINEAR;
+    AddressU = CLAMP;
+    AddressV = CLAMP;
 };
 
-// ƒTƒ“ƒvƒ‹ˆÊ’u: 0, }8, }16, c, }96  i’†S+12ƒyƒA=25tapj
-// ƒĞ=40 ‚Å³‹K‰»Ï‚İ‚Ìd‚İ
+// ³‹K‰»Ï‚İisum = w0 + 2*ƒ°w[i] = 1j
 static const float w[13] =
 {
-    0.064759, // 0
-    0.063502, // }8
-    0.059815, // }16
-    0.053249, // }24
-    0.044676, // }32
-    0.035170, // }40
-    0.025782, // }48
-    0.017335, // }56
-    0.010285, // }64
-    0.005312, // }72
-    0.002415, // }80
-    0.000976, // }88
-    0.000362 // }96
+    0.0807799342, // 0
+    0.0791803843, // }8
+    0.0745692777, // }16
+    0.0674730727, // }24
+    0.0586582714, // }32
+    0.0489955068, // }40
+    0.0393198152, // }48
+    0.0303176059, // }56
+    0.0224598348, // }64
+    0.0159862439, // }72
+    0.0109323753, // }80
+    0.0071830824, // }88
+    0.0045345624 // }96
 };
 
 // ---- ‰¡•ûŒü ----
@@ -193,9 +198,9 @@ float4 GaussianSparseH(float2 texCoord : TEXCOORD0) : COLOR
     [unroll]
     for (int i = 1; i <= 12; i++)
     {
-        float offset = (float) (i * 8); // 8,16,...,96
-        c += tex2D(SrcSampler, texCoord + step * offset) * w[i];
-        c += tex2D(SrcSampler, texCoord - step * offset) * w[i];
+        float ofs = (float) (i * 8); // 8,16,...,96
+        c += tex2D(SrcSampler, texCoord + step * ofs) * w[i];
+        c += tex2D(SrcSampler, texCoord - step * ofs) * w[i];
     }
     return c;
 }
@@ -209,9 +214,9 @@ float4 GaussianSparseV(float2 texCoord : TEXCOORD0) : COLOR
     [unroll]
     for (int i = 1; i <= 12; i++)
     {
-        float offset = (float) (i * 8);
-        c += tex2D(SrcSampler, texCoord + step * offset) * w[i];
-        c += tex2D(SrcSampler, texCoord - step * offset) * w[i];
+        float ofs = (float) (i * 8);
+        c += tex2D(SrcSampler, texCoord + step * ofs) * w[i];
+        c += tex2D(SrcSampler, texCoord - step * ofs) * w[i];
     }
     return c;
 }
@@ -223,7 +228,6 @@ technique GaussianH
         PixelShader = compile ps_2_0 GaussianSparseH();
     }
 }
-
 technique GaussianV
 {
     pass P0
