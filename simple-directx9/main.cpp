@@ -23,16 +23,9 @@ DWORD g_dwNumMaterials = 0;
 LPD3DXEFFECT g_pEffect = NULL;
 bool g_bClose = false;
 
-// バックバッファとデプスバッファを保存
-LPDIRECT3DSURFACE9 g_pBackBuffer = NULL;
-
 // オフスクリーン用
 LPDIRECT3DTEXTURE9 g_pSceneTex = NULL;
-LPDIRECT3DSURFACE9 g_pSceneSurface = NULL;
-
-// 一時バッファ（ブラー用）
 LPDIRECT3DTEXTURE9 g_pTempTex = NULL;
-LPDIRECT3DSURFACE9 g_pTempSurface = NULL;
 
 const int WINDOW_SIZE_W = 1600;
 const int WINDOW_SIZE_H = 900;
@@ -134,8 +127,6 @@ void InitD3D(HWND hWnd)
                                       &g_pd3dDevice);
     assert(SUCCEEDED(hr));
 
-    g_pd3dDevice->GetRenderTarget(0, &g_pBackBuffer);
-
     // Mesh 読み込み
     LPD3DXBUFFER pMtrlBuffer = NULL;
     hr = D3DXLoadMeshFromX(_T("cube.x"),
@@ -176,7 +167,7 @@ void InitD3D(HWND hWnd)
                                   NULL);
     assert(SUCCEEDED(hr));
 
-    // オフスクリーン用テクスチャ＋デプス
+    // オフスクリーン用テクスチャ（サーフェイスは毎回ローカル取得）
     D3DXCreateTexture(g_pd3dDevice,
                       WINDOW_SIZE_W,
                       WINDOW_SIZE_H,
@@ -186,9 +177,6 @@ void InitD3D(HWND hWnd)
                       D3DPOOL_DEFAULT,
                       &g_pSceneTex);
 
-    g_pSceneTex->GetSurfaceLevel(0, &g_pSceneSurface);
-
-    // ブラー用一時テクスチャ
     D3DXCreateTexture(g_pd3dDevice,
                       WINDOW_SIZE_W,
                       WINDOW_SIZE_H,
@@ -197,8 +185,6 @@ void InitD3D(HWND hWnd)
                       D3DFMT_A8R8G8B8,
                       D3DPOOL_DEFAULT,
                       &g_pTempTex);
-
-    g_pTempTex->GetSurfaceLevel(0, &g_pTempSurface);
 }
 
 void Cleanup()
@@ -211,13 +197,8 @@ void Cleanup()
     SAFE_RELEASE(g_pMesh);
     SAFE_RELEASE(g_pEffect);
 
-    SAFE_RELEASE(g_pSceneSurface);
     SAFE_RELEASE(g_pSceneTex);
-
-    SAFE_RELEASE(g_pTempSurface);
     SAFE_RELEASE(g_pTempTex);
-
-    SAFE_RELEASE(g_pBackBuffer);
 
     SAFE_RELEASE(g_pd3dDevice);
     SAFE_RELEASE(g_pD3D);
@@ -225,30 +206,45 @@ void Cleanup()
 
 void Render()
 {
-    // 1. シーンをオフスクリーンに描画
+    // 1) シーン → g_pSceneTex
     RenderSceneToTexture();
 
-    // 2. 横方向ブラー → g_pTempTex
-    g_pd3dDevice->SetRenderTarget(0, g_pTempSurface);
-    g_pd3dDevice->Clear(0, NULL, D3DCLEAR_TARGET, 0, 1.0f, 0);
-    g_pd3dDevice->BeginScene();
-    DrawFullscreenQuad(g_pSceneTex, "GaussianH");
-    g_pd3dDevice->EndScene();
+    // 2) 横方向ブラー → g_pTempTex（ローカルでRT面取得）
+    {
+        IDirect3DSurface9* pTempRT = NULL;
+        g_pTempTex->GetSurfaceLevel(0, &pTempRT);
+        g_pd3dDevice->SetRenderTarget(0, pTempRT);
+        SAFE_RELEASE(pTempRT); // Device内でAddRefされるので即ReleaseでOK
 
-    // 3. 縦方向ブラー → バックバッファ
-    g_pd3dDevice->SetRenderTarget(0, g_pBackBuffer);
-    g_pd3dDevice->Clear(0, NULL, D3DCLEAR_TARGET, 0, 1.0f, 0);
-    g_pd3dDevice->BeginScene();
-    DrawFullscreenQuad(g_pTempTex, "GaussianV");
+        g_pd3dDevice->Clear(0, NULL, D3DCLEAR_TARGET, 0, 1.0f, 0);
+        g_pd3dDevice->BeginScene();
+        DrawFullscreenQuad(g_pSceneTex, "GaussianH");
+        g_pd3dDevice->EndScene();
+    }
 
-    g_pd3dDevice->EndScene();
+    // 3) 縦方向ブラー → バックバッファ（毎回取得）
+    {
+        IDirect3DSurface9* pBackBuffer = NULL;
+        g_pd3dDevice->GetBackBuffer(0, 0, D3DBACKBUFFER_TYPE_MONO, &pBackBuffer);
+        g_pd3dDevice->SetRenderTarget(0, pBackBuffer);
+        SAFE_RELEASE(pBackBuffer);
+
+        g_pd3dDevice->Clear(0, NULL, D3DCLEAR_TARGET, 0, 1.0f, 0);
+        g_pd3dDevice->BeginScene();
+        DrawFullscreenQuad(g_pTempTex, "GaussianV");
+        g_pd3dDevice->EndScene();
+    }
 
     g_pd3dDevice->Present(NULL, NULL, NULL, NULL);
 }
 
 void RenderSceneToTexture()
 {
-    g_pd3dDevice->SetRenderTarget(0, g_pSceneSurface);
+    // ----[変更] オフスクリーンのRT面をローカルで取得 ----
+    IDirect3DSurface9* pSceneRT = NULL;
+    g_pSceneTex->GetSurfaceLevel(0, &pSceneRT);
+    g_pd3dDevice->SetRenderTarget(0, pSceneRT);
+    SAFE_RELEASE(pSceneRT);
 
     g_pd3dDevice->Clear(0,
                         NULL,
