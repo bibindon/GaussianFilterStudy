@@ -25,17 +25,14 @@ bool g_bClose = false;
 
 // バックバッファとデプスバッファを保存
 LPDIRECT3DSURFACE9 g_pBackBuffer = NULL;
-LPDIRECT3DSURFACE9 g_pDepthBuffer = NULL;
 
 // オフスクリーン用
 LPDIRECT3DTEXTURE9 g_pSceneTex = NULL;
 LPDIRECT3DSURFACE9 g_pSceneSurface = NULL;
-LPDIRECT3DSURFACE9 g_pSceneDepth = NULL;
 
 // 一時バッファ（ブラー用）
 LPDIRECT3DTEXTURE9 g_pTempTex = NULL;
 LPDIRECT3DSURFACE9 g_pTempSurface = NULL;
-LPDIRECT3DSURFACE9 g_pTempDepth = NULL;
 
 const int WINDOW_SIZE_W = 1600;
 const int WINDOW_SIZE_H = 900;
@@ -138,7 +135,6 @@ void InitD3D(HWND hWnd)
     assert(SUCCEEDED(hr));
 
     g_pd3dDevice->GetRenderTarget(0, &g_pBackBuffer);
-    g_pd3dDevice->GetDepthStencilSurface(&g_pDepthBuffer);
 
     // Mesh 読み込み
     LPD3DXBUFFER pMtrlBuffer = NULL;
@@ -192,16 +188,7 @@ void InitD3D(HWND hWnd)
 
     g_pSceneTex->GetSurfaceLevel(0, &g_pSceneSurface);
 
-    g_pd3dDevice->CreateDepthStencilSurface(WINDOW_SIZE_W,
-                                            WINDOW_SIZE_H,
-                                            D3DFMT_D16,
-                                            D3DMULTISAMPLE_NONE,
-                                            0,
-                                            TRUE,
-                                            &g_pSceneDepth,
-                                            NULL);
-
-    // ブラー用一時テクスチャ＋デプス
+    // ブラー用一時テクスチャ
     D3DXCreateTexture(g_pd3dDevice,
                       WINDOW_SIZE_W,
                       WINDOW_SIZE_H,
@@ -212,15 +199,6 @@ void InitD3D(HWND hWnd)
                       &g_pTempTex);
 
     g_pTempTex->GetSurfaceLevel(0, &g_pTempSurface);
-
-    g_pd3dDevice->CreateDepthStencilSurface(WINDOW_SIZE_W,
-                                            WINDOW_SIZE_H,
-                                            D3DFMT_D16,
-                                            D3DMULTISAMPLE_NONE,
-                                            0,
-                                            TRUE,
-                                            &g_pTempDepth,
-                                            NULL);
 }
 
 void Cleanup()
@@ -235,14 +213,11 @@ void Cleanup()
 
     SAFE_RELEASE(g_pSceneSurface);
     SAFE_RELEASE(g_pSceneTex);
-    SAFE_RELEASE(g_pSceneDepth);
 
     SAFE_RELEASE(g_pTempSurface);
     SAFE_RELEASE(g_pTempTex);
-    SAFE_RELEASE(g_pTempDepth);
 
     SAFE_RELEASE(g_pBackBuffer);
-    SAFE_RELEASE(g_pDepthBuffer);
 
     SAFE_RELEASE(g_pd3dDevice);
     SAFE_RELEASE(g_pD3D);
@@ -255,7 +230,6 @@ void Render()
 
     // 2. 横方向ブラー → g_pTempTex
     g_pd3dDevice->SetRenderTarget(0, g_pTempSurface);
-    g_pd3dDevice->SetDepthStencilSurface(g_pTempDepth);
     g_pd3dDevice->Clear(0, NULL, D3DCLEAR_TARGET, 0, 1.0f, 0);
     g_pd3dDevice->BeginScene();
     DrawFullscreenQuad(g_pSceneTex, "GaussianH");
@@ -263,7 +237,6 @@ void Render()
 
     // 3. 縦方向ブラー → バックバッファ
     g_pd3dDevice->SetRenderTarget(0, g_pBackBuffer);
-    g_pd3dDevice->SetDepthStencilSurface(g_pDepthBuffer);
     g_pd3dDevice->Clear(0, NULL, D3DCLEAR_TARGET, 0, 1.0f, 0);
     g_pd3dDevice->BeginScene();
     DrawFullscreenQuad(g_pTempTex, "GaussianV");
@@ -276,7 +249,6 @@ void Render()
 void RenderSceneToTexture()
 {
     g_pd3dDevice->SetRenderTarget(0, g_pSceneSurface);
-    g_pd3dDevice->SetDepthStencilSurface(g_pSceneDepth);
 
     g_pd3dDevice->Clear(0,
                         NULL,
