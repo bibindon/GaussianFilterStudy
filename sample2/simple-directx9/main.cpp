@@ -206,15 +206,33 @@ void Cleanup()
 
 void Render()
 {
+    static int i = 1;
+    i += 2;
+
+    if (i > 222)
+    {
+        i = 1;
+    }
+
+    int i2 = i;
+
+    if (i2 > 111)
+    {
+        i2 = 111 - (i2 - 111);
+    }
+
+    g_pEffect->SetInt("g_sampleSize", i2);
+
+
     // 1) シーン → g_pSceneTex
     RenderSceneToTexture();
 
-    // 2) 横方向ブラー → g_pTempTex（ローカルでRT面取得）
+    // 2) 横方向ブラー 1回目
     {
         IDirect3DSurface9* pTempRT = NULL;
         g_pTempTex->GetSurfaceLevel(0, &pTempRT);
         g_pd3dDevice->SetRenderTarget(0, pTempRT);
-        SAFE_RELEASE(pTempRT); // Device内でAddRefされるので即ReleaseでOK
+        SAFE_RELEASE(pTempRT);
 
         g_pd3dDevice->Clear(0, NULL, D3DCLEAR_TARGET, 0, 1.0f, 0);
         g_pd3dDevice->BeginScene();
@@ -222,7 +240,33 @@ void Render()
         g_pd3dDevice->EndScene();
     }
 
-    // 3) 縦方向ブラー → バックバッファ（毎回取得）
+    // 3) 横方向ブラー 2回目
+    {
+        IDirect3DSurface9* pTempRT = NULL;
+        g_pSceneTex->GetSurfaceLevel(0, &pTempRT);
+        g_pd3dDevice->SetRenderTarget(0, pTempRT);
+        SAFE_RELEASE(pTempRT);
+
+        g_pd3dDevice->Clear(0, NULL, D3DCLEAR_TARGET, 0, 1.0f, 0);
+        g_pd3dDevice->BeginScene();
+        DrawFullscreenQuad(g_pTempTex, "GaussianH");
+        g_pd3dDevice->EndScene();
+    }
+
+    // 4) 縦方向ブラー
+    {
+        IDirect3DSurface9* pTempRT = NULL;
+        g_pTempTex->GetSurfaceLevel(0, &pTempRT);
+        g_pd3dDevice->SetRenderTarget(0, pTempRT);
+        SAFE_RELEASE(pTempRT);
+
+        g_pd3dDevice->Clear(0, NULL, D3DCLEAR_TARGET, 0, 1.0f, 0);
+        g_pd3dDevice->BeginScene();
+        DrawFullscreenQuad(g_pSceneTex, "GaussianV");
+        g_pd3dDevice->EndScene();
+    }
+
+    // 5) 縦方向ブラー
     {
         IDirect3DSurface9* pBackBuffer = NULL;
         g_pd3dDevice->GetBackBuffer(0, 0, D3DBACKBUFFER_TYPE_MONO, &pBackBuffer);
