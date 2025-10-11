@@ -73,6 +73,11 @@ float4 GaussianSparseH(float2 texCoord : TEXCOORD0) : COLOR
     float2 step = float2(g_TexelSize.x, 0.0);
     float4 c = tex2D(SrcSampler, texCoord) / g_sampleSize;
 
+    if (texCoord.x > 0.5)
+    {
+        return c * g_sampleSize;
+    }
+
     // 直接g_sampleSizeを使うことはできない。
     // コンパイル時に定数じゃないとfor文は使えないから
     [unroll]
@@ -95,17 +100,22 @@ float4 GaussianSparseV(float2 texCoord : TEXCOORD0) : COLOR
     float2 step = float2(0.0, g_TexelSize.y);
     float4 c = tex2D(SrcSampler, texCoord) / g_sampleSize;
 
-    [unroll]
-    for (int i = 1; i <= SAMPLE_SIZE_MAX / 2; i++)
+    if (texCoord.x > 0.5)
     {
-        if ((g_sampleSize / 2)  < i)
-        {
-            break;
-        }
-
-        c += tex2D(SrcSampler, texCoord + step * i) / g_sampleSize;
-        c += tex2D(SrcSampler, texCoord - step * i) / g_sampleSize;
+        return c * g_sampleSize;
     }
+
+    [unroll]
+        for (int i = 1; i <= SAMPLE_SIZE_MAX / 2; i++)
+        {
+            if ((g_sampleSize / 2) < i)
+            {
+                break;
+            }
+
+            c += tex2D(SrcSampler, texCoord + step * i) / g_sampleSize;
+            c += tex2D(SrcSampler, texCoord - step * i) / g_sampleSize;
+        }
     return c;
 }
 
