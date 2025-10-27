@@ -41,8 +41,8 @@ technique Technique1
 {
     pass P0
     {
-        VertexShader = compile vs_2_0 VS_Default();
-        PixelShader = compile ps_2_0 PS_Default();
+        VertexShader = compile vs_3_0 VS_Default();
+        PixelShader = compile ps_3_0 PS_Default();
     }
 }
 
@@ -62,36 +62,18 @@ sampler SrcSampler = sampler_state
     AddressV = CLAMP;
 };
 
-// ê≥ãKâªçœÇ›Åisum = w0 + 2*É∞w[i] = 1Åj
-static const float w[13] =
-{
-    0.0807799342, // 0
-    0.0791803843, // Å}8
-    0.0745692777, // Å}16
-    0.0674730727, // Å}24
-    0.0586582714, // Å}32
-    0.0489955068, // Å}40
-    0.0393198152, // Å}48
-    0.0303176059, // Å}56
-    0.0224598348, // Å}64
-    0.0159862439, // Å}72
-    0.0109323753, // Å}80
-    0.0071830824, // Å}88
-    0.0045345624 // Å}96
-};
-
 // ---- â°ï˚å¸ ----
 float4 GaussianSparseH(float2 texCoord : TEXCOORD0) : COLOR
 {
     float2 step = float2(g_TexelSize.x, 0.0);
-    float4 c = tex2D(SrcSampler, texCoord) * w[0];
+    float4 c = tex2D(SrcSampler, texCoord) /25;
 
     [unroll]
     for (int i = 1; i <= 12; i++)
     {
         float ofs = i;
-        c += tex2D(SrcSampler, texCoord + step * ofs) * w[i];
-        c += tex2D(SrcSampler, texCoord - step * ofs) * w[i];
+        c += tex2D(SrcSampler, texCoord + step * ofs) / 25;
+        c += tex2D(SrcSampler, texCoord - step * ofs) / 25;
     }
     return c;
 }
@@ -100,14 +82,14 @@ float4 GaussianSparseH(float2 texCoord : TEXCOORD0) : COLOR
 float4 GaussianSparseV(float2 texCoord : TEXCOORD0) : COLOR
 {
     float2 step = float2(0.0, g_TexelSize.y);
-    float4 c = tex2D(SrcSampler, texCoord) * w[0];
+    float4 c = tex2D(SrcSampler, texCoord) / 25;
 
     [unroll]
     for (int i = 1; i <= 12; i++)
     {
         float ofs = i;
-        c += tex2D(SrcSampler, texCoord + step * ofs) * w[i];
-        c += tex2D(SrcSampler, texCoord - step * ofs) * w[i];
+        c += tex2D(SrcSampler, texCoord + step * ofs) / 25;
+        c += tex2D(SrcSampler, texCoord - step * ofs) / 25;
     }
     return c;
 }
