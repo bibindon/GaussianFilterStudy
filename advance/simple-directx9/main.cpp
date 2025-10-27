@@ -27,6 +27,16 @@ bool g_bClose = false;
 LPDIRECT3DTEXTURE9 g_pSceneTex = NULL;
 LPDIRECT3DTEXTURE9 g_pTempTex = NULL;
 
+// 開始スケールを 1 / (2^kStartExp) にする
+static const int kStartExp = 1;
+
+// レベル数
+static const int kNumLevels = 6;
+
+// 低解像度チェーン
+std::vector<LPDIRECT3DTEXTURE9> g_texDown;
+std::vector<LPDIRECT3DTEXTURE9> g_texUp;
+
 const int WINDOW_SIZE_W = 1600;
 const int WINDOW_SIZE_H = 900;
 
@@ -35,6 +45,44 @@ struct ScreenVertex {
     float u, v;
 };
 #define FVF_SCREENVERTEX (D3DFVF_XYZRHW | D3DFVF_TEX1)
+
+// 現在の RT サイズに合う全画面板を描き、SrcTex, g_TexelSize をセット
+static void DrawFullscreenQuadCurrentRT(LPDIRECT3DTEXTURE9 srcTex, const char* tech)
+{
+    // 現在の RT サイズ
+    IDirect3DSurface9* pRT = NULL;
+    g_pd3dDevice->GetRenderTarget(0, &pRT);
+    D3DSURFACE_DESC rtDesc = {};
+    pRT->GetDesc(&rtDesc);
+    SAFE_RELEASE(pRT);
+
+    // サンプル元テクスチャのテクセルサイズ
+    D3DSURFACE_DESC srcDesc = {};
+    srcTex->GetLevelDesc(0, &srcDesc);
+    float texelSize[2] = { 1.0f / srcDesc.Width, 1.0f / srcDesc.Height };
+
+    g_pEffect->SetTechnique(tech);
+    g_pEffect->SetTexture("g_SrcTex", srcTex);
+    g_pEffect->SetFloatArray("g_TexelSize", texelSize, 2);
+
+    ScreenVertex quad[4] =
+    {
+        {                -0.5f,                 -0.5f, 0, 1, 0, 0 },
+        { (float)rtDesc.Width  - 0.5f,         -0.5f, 0, 1, 1, 0 },
+        {                -0.5f, (float)rtDesc.Height - 0.5f, 0, 1, 0, 1 },
+        { (float)rtDesc.Width  - 0.5f, (float)rtDesc.Height - 0.5f, 0, 1, 1, 1 }
+    };
+
+    g_pd3dDevice->SetRenderState(D3DRS_ZENABLE, FALSE);
+    g_pd3dDevice->SetFVF(FVF_SCREENVERTEX);
+    g_pEffect->Begin(NULL, 0);
+    g_pEffect->BeginPass(0);
+    g_pd3dDevice->DrawPrimitiveUP(D3DPT_TRIANGLESTRIP, 2, quad, sizeof(ScreenVertex));
+    g_pEffect->EndPass();
+    g_pEffect->End();
+    g_pd3dDevice->SetRenderState(D3DRS_ZENABLE, TRUE);
+}
+
 
 static void InitD3D(HWND hWnd);
 static void Cleanup();
@@ -185,11 +233,41 @@ void InitD3D(HWND hWnd)
                       D3DFMT_A8R8G8B8,
                       D3DPOOL_DEFAULT,
                       &g_pTempTex);
+
+    g_texDown.assign(kNumLevels, NULL);
+    g_texUp.assign(kNumLevels, NULL);
+
+    for (int level = 0; level < kNumLevels; ++level)
+    {
+        int levelExp = kStartExp + level;
+        int texW = WINDOW_SIZE_W >> levelExp;
+        int texH = WINDOW_SIZE_H >> levelExp;
+
+        if (texW < 1) { texW = 1; }
+        if (texH < 1) { texH = 1; }
+
+        D3DXCreateTexture(g_pd3dDevice, texW, texH, 1,
+                          D3DUSAGE_RENDERTARGET, D3DFMT_A8R8G8B8,
+                          D3DPOOL_DEFAULT, &g_texDown[level]);
+
+        D3DXCreateTexture(g_pd3dDevice, texW, texH, 1,
+                          D3DUSAGE_RENDERTARGET, D3DFMT_A8R8G8B8,
+                          D3DPOOL_DEFAULT, &g_texUp[level]);
+    }
 }
 
 void Cleanup()
 {
     for (auto& t : g_pTextures)
+    {
+        SAFE_RELEASE(t);
+    }
+
+    for (auto& t : g_texDown)
+    {
+        SAFE_RELEASE(t);
+    }
+    for (auto& t : g_texUp)
     {
         SAFE_RELEASE(t);
     }
@@ -206,32 +284,99 @@ void Cleanup()
 
 void Render()
 {
-    // 1) シーン → g_pSceneTex
     RenderSceneToTexture();
 
-    // 2) 横方向ブラー → g_pTempTex（ローカルでRT面取得）
+    // Down チェーン
     {
-        IDirect3DSurface9* pTempRT = NULL;
-        g_pTempTex->GetSurfaceLevel(0, &pTempRT);
-        g_pd3dDevice->SetRenderTarget(0, pTempRT);
-        SAFE_RELEASE(pTempRT); // Device内でAddRefされるので即ReleaseでOK
+        IDirect3DSurface9* renderTarget = NULL;
+        LPDIRECT3DTEXTURE9 sourceTex = g_pSceneTex;
 
-        g_pd3dDevice->Clear(0, NULL, D3DCLEAR_TARGET, 0, 1.0f, 0);
-        g_pd3dDevice->BeginScene();
-        DrawFullscreenQuad(g_pSceneTex, "GaussianH");
-        g_pd3dDevice->EndScene();
+        for (int level = 0; level < kNumLevels; ++level)
+        {
+            g_texDown[level]->GetSurfaceLevel(0, &renderTarget);
+            g_pd3dDevice->SetRenderTarget(0, renderTarget);
+            SAFE_RELEASE(renderTarget);
+
+            g_pd3dDevice->Clear(0, NULL, D3DCLEAR_TARGET, 0, 1.0f, 0);
+            g_pd3dDevice->BeginScene();
+            DrawFullscreenQuadCurrentRT(sourceTex, "Down3x3");
+            g_pd3dDevice->EndScene();
+
+            sourceTex = g_texDown[level];
+        }
     }
 
-    // 3) 縦方向ブラー → バックバッファ（毎回取得）
+    // --- Up チェーン（純粋アップサンプル） ---
     {
-        IDirect3DSurface9* pBackBuffer = NULL;
-        g_pd3dDevice->GetBackBuffer(0, 0, D3DBACKBUFFER_TYPE_MONO, &pBackBuffer);
-        g_pd3dDevice->SetRenderTarget(0, pBackBuffer);
-        SAFE_RELEASE(pBackBuffer);
+        IDirect3DSurface9* rt = NULL;
+        int last = kNumLevels - 1;
+
+        // 最下段をコピー
+        g_texUp[last]->GetSurfaceLevel(0, &rt);
+        g_pd3dDevice->SetRenderTarget(0, rt);
+        SAFE_RELEASE(rt);
+        g_pd3dDevice->Clear(0, NULL, D3DCLEAR_TARGET, 0, 1.0f, 0);
+        g_pd3dDevice->BeginScene();
+        DrawFullscreenQuadCurrentRT(g_texDown[last], "Copy");
+        g_pd3dDevice->EndScene();
+
+        // 各段：足し戻し無しで上へ
+        for (int level = last - 1; level >= 0; --level)
+        {
+            g_texUp[level]->GetSurfaceLevel(0, &rt);
+            g_pd3dDevice->SetRenderTarget(0, rt);
+            SAFE_RELEASE(rt);
+
+            g_pd3dDevice->Clear(0, NULL, D3DCLEAR_TARGET, 0, 1.0f, 0);
+            g_pd3dDevice->BeginScene();
+            DrawFullscreenQuadCurrentRT(g_texUp[level + 1], "UpsampleOnly3x3");
+            g_pd3dDevice->EndScene();
+        }
+    }
+
+    // Up チェーン
+    if (false)
+    {
+        IDirect3DSurface9* renderTarget = NULL;
+
+        // 最下段のコピー
+        int last = kNumLevels - 1;
+        g_texUp[last]->GetSurfaceLevel(0, &renderTarget);
+        g_pd3dDevice->SetRenderTarget(0, renderTarget);
+        SAFE_RELEASE(renderTarget);
 
         g_pd3dDevice->Clear(0, NULL, D3DCLEAR_TARGET, 0, 1.0f, 0);
         g_pd3dDevice->BeginScene();
-        DrawFullscreenQuad(g_pTempTex, "GaussianV");
+        DrawFullscreenQuadCurrentRT(g_texDown[last], "Copy");
+        g_pd3dDevice->EndScene();
+
+        // ひとつ上へ順次足し戻し
+        for (int level = last - 1; level >= 0; --level)
+        {
+            g_texUp[level]->GetSurfaceLevel(0, &renderTarget);
+            g_pd3dDevice->SetRenderTarget(0, renderTarget);
+            SAFE_RELEASE(renderTarget);
+
+            g_pEffect->SetTexture("g_SrcTex2", g_texDown[level]);
+
+            g_pd3dDevice->Clear(0, NULL, D3DCLEAR_TARGET, 0, 1.0f, 0);
+            g_pd3dDevice->BeginScene();
+            DrawFullscreenQuadCurrentRT(g_texUp[level + 1], "UpsampleAdd3x3");
+            g_pd3dDevice->EndScene();
+        }
+    }
+
+    // 最終出力（フル解像度へアップサンプル）
+    {
+        IDirect3DSurface9* backBuffer = NULL;
+        g_pd3dDevice->GetBackBuffer(0, 0, D3DBACKBUFFER_TYPE_MONO, &backBuffer);
+        g_pd3dDevice->SetRenderTarget(0, backBuffer);
+        SAFE_RELEASE(backBuffer);
+
+        g_pd3dDevice->Clear(0, NULL, D3DCLEAR_TARGET, 0, 1.0f, 0);
+        g_pd3dDevice->BeginScene();
+        DrawFullscreenQuadCurrentRT(g_texUp[0], "UpsampleOnly3x3");
+//        DrawFullscreenQuadCurrentRT(g_texDown[7], "UpsampleOnly3x3");
         g_pd3dDevice->EndScene();
     }
 
