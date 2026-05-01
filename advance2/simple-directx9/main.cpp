@@ -26,6 +26,7 @@ bool g_bClose = false;
 // オフスクリーン用
 LPDIRECT3DTEXTURE9 g_pSceneTex = NULL;
 LPDIRECT3DTEXTURE9 g_pTempTex = NULL;
+LPDIRECT3DTEXTURE9 g_pMaskTex = NULL;
 
 // 開始スケールを 1 / (2^kStartExp) にする
 static const int kStartExp = 3;
@@ -88,6 +89,10 @@ static void InitD3D(HWND hWnd);
 static void Cleanup();
 static void Render();
 static void DrawFullscreenQuad(LPDIRECT3DTEXTURE9 tex, const char* tech);
+static void DrawFullscreenQuadMasked(LPDIRECT3DTEXTURE9 blurTex,
+                                     LPDIRECT3DTEXTURE9 originalTex,
+                                     LPDIRECT3DTEXTURE9 maskTex,
+                                     const char* tech);
 static void RenderSceneToTexture();
 
 LRESULT WINAPI MsgProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam);
@@ -215,6 +220,14 @@ void InitD3D(HWND hWnd)
                                   NULL);
     assert(SUCCEEDED(hr));
 
+    // マスク画像読み込み
+    // 白い部分ほどガウスフィルター後の画像を使い、黒い部分ほど元画像を使う。
+    // mask.png は exe の作業フォルダに置く。
+    hr = D3DXCreateTextureFromFile(g_pd3dDevice,
+                                   _T("mask.png"),
+                                   &g_pMaskTex);
+    assert(SUCCEEDED(hr));
+
     // オフスクリーン用テクスチャ（サーフェイスは毎回ローカル取得）
     D3DXCreateTexture(g_pd3dDevice,
                       WINDOW_SIZE_W,
@@ -277,6 +290,7 @@ void Cleanup()
 
     SAFE_RELEASE(g_pSceneTex);
     SAFE_RELEASE(g_pTempTex);
+    SAFE_RELEASE(g_pMaskTex);
 
     SAFE_RELEASE(g_pd3dDevice);
     SAFE_RELEASE(g_pD3D);
@@ -375,8 +389,8 @@ void Render()
 
         g_pd3dDevice->Clear(0, NULL, D3DCLEAR_TARGET, 0, 1.0f, 0);
         g_pd3dDevice->BeginScene();
-        DrawFullscreenQuadCurrentRT(g_texUp[0], "UpsampleOnly3x3");
-//        DrawFullscreenQuadCurrentRT(g_texDown[7], "UpsampleOnly3x3");
+        DrawFullscreenQuadMasked(g_texUp[0], g_pSceneTex, g_pMaskTex, "CompositeMaskedBlur");
+//        DrawFullscreenQuadCurrentRT(g_texUp[0], "UpsampleOnly3x3");
         g_pd3dDevice->EndScene();
     }
 
@@ -402,31 +416,59 @@ void RenderSceneToTexture()
 
     static float f = 0.0f;
     f += 0.02f;
+
+    // 効果を見やすくするため、カメラを少し遠ざけて広い範囲を映す。
     D3DXMATRIX View, Proj, World, mat;
-    D3DXVECTOR3 eye(6 * sinf(f), 3, -6 * cosf(f));
-    D3DXVECTOR3 at(0, 0, 0);
-    D3DXVECTOR3 up(0, 1, 0);
+    D3DXVECTOR3 eye(18.0f * sinf(f), 8.0f, -18.0f * cosf(f));
+    D3DXVECTOR3 at(0.0f, 0.0f, 0.0f);
+    D3DXVECTOR3 up(0.0f, 1.0f, 0.0f);
     D3DXMatrixLookAtLH(&View, &eye, &at, &up);
     D3DXMatrixPerspectiveFovLH(&Proj,
                                D3DXToRadian(45),
                                (float)WINDOW_SIZE_W / WINDOW_SIZE_H,
                                1.0f,
-                               100.0f);
-
-    D3DXMatrixIdentity(&World);
-    mat = World * View * Proj;
-    g_pEffect->SetMatrix("g_matWorldViewProj", &mat);
+                               200.0f);
 
     g_pEffect->SetTechnique("Technique1");
     UINT numPass;
     g_pEffect->Begin(&numPass, 0);
     g_pEffect->BeginPass(0);
-    for (DWORD i = 0; i < g_dwNumMaterials; i++)
+
+    // 3Dモデルをグリッド状に多数配置する。
+    // マスクあり／なしの境界や、ぼけ具合の違いが分かりやすくなる。
+    const int kModelCountX = 9;
+    const int kModelCountZ = 7;
+    const float kModelInterval = 2.7f;
+
+    for (int z = 0; z < kModelCountZ; ++z)
     {
-        g_pEffect->SetTexture("texture1", g_pTextures[i]);
-        g_pEffect->CommitChanges();
-        g_pMesh->DrawSubset(i);
+        for (int x = 0; x < kModelCountX; ++x)
+        {
+            float posX = (x - (kModelCountX - 1) * 0.5f) * kModelInterval;
+            float posZ = (z - (kModelCountZ - 1) * 0.5f) * kModelInterval;
+
+            D3DXMATRIX matScale;
+            D3DXMATRIX matRot;
+            D3DXMATRIX matTrans;
+
+            float scale = 0.75f + 0.10f * ((x + z) % 3);
+            D3DXMatrixScaling(&matScale, scale, scale, scale);
+            D3DXMatrixRotationY(&matRot, f * 0.25f + (float)(x - z) * 0.25f);
+            D3DXMatrixTranslation(&matTrans, posX, 0.0f, posZ);
+
+            World = matScale * matRot * matTrans;
+            mat = World * View * Proj;
+            g_pEffect->SetMatrix("g_matWorldViewProj", &mat);
+
+            for (DWORD i = 0; i < g_dwNumMaterials; i++)
+            {
+                g_pEffect->SetTexture("texture1", g_pTextures[i]);
+                g_pEffect->CommitChanges();
+                g_pMesh->DrawSubset(i);
+            }
+        }
     }
+
     g_pEffect->EndPass();
     g_pEffect->End();
 
@@ -439,6 +481,39 @@ void DrawFullscreenQuad(LPDIRECT3DTEXTURE9 tex, const char* tech)
     g_pEffect->SetTexture("g_SrcTex", tex);
 
     float texelSize[2] = { 1.0f / WINDOW_SIZE_W, 1.0f / WINDOW_SIZE_H };
+    g_pEffect->SetFloatArray("g_TexelSize", texelSize, 2);
+
+    ScreenVertex quad[4] = {
+        {                -0.5f,                -0.5f, 0, 1, 0, 0 },
+        { WINDOW_SIZE_W - 0.5f,                -0.5f, 0, 1, 1, 0 },
+        {                -0.5f, WINDOW_SIZE_H - 0.5f, 0, 1, 0, 1 },
+        { WINDOW_SIZE_W - 0.5f, WINDOW_SIZE_H - 0.5f, 0, 1, 1, 1 }
+    };
+
+    g_pd3dDevice->SetRenderState(D3DRS_ZENABLE, FALSE);
+    g_pd3dDevice->SetFVF(FVF_SCREENVERTEX);
+    g_pEffect->Begin(NULL, 0);
+    g_pEffect->BeginPass(0);
+    g_pd3dDevice->DrawPrimitiveUP(D3DPT_TRIANGLESTRIP, 2, quad, sizeof(ScreenVertex));
+    g_pEffect->EndPass();
+    g_pEffect->End();
+    g_pd3dDevice->SetRenderState(D3DRS_ZENABLE, TRUE);
+}
+
+
+void DrawFullscreenQuadMasked(LPDIRECT3DTEXTURE9 blurTex,
+                              LPDIRECT3DTEXTURE9 originalTex,
+                              LPDIRECT3DTEXTURE9 maskTex,
+                              const char* tech)
+{
+    g_pEffect->SetTechnique(tech);
+    g_pEffect->SetTexture("g_SrcTex", blurTex);
+    g_pEffect->SetTexture("g_SrcTex2", originalTex);
+    g_pEffect->SetTexture("g_MaskTex", maskTex);
+
+    D3DSURFACE_DESC srcDesc = {};
+    blurTex->GetLevelDesc(0, &srcDesc);
+    float texelSize[2] = { 1.0f / srcDesc.Width, 1.0f / srcDesc.Height };
     g_pEffect->SetFloatArray("g_TexelSize", texelSize, 2);
 
     ScreenVertex quad[4] = {

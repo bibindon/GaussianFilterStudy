@@ -123,6 +123,16 @@ sampler SrcSampler2 = sampler_state
     AddressV  = CLAMP;
 };
 
+texture g_MaskTex;
+sampler MaskSampler = sampler_state
+{
+    Texture   = <g_MaskTex>;
+    MinFilter = LINEAR;
+    MagFilter = LINEAR;
+    AddressU  = CLAMP;
+    AddressV  = CLAMP;
+};
+
 // 3x3 Gaussian 相当（1 2 1; 2 4 2; 1 2 1）を 16 で正規化
 float4 PS_Down3x3(float2 uv : TEXCOORD0) : COLOR
 {
@@ -192,6 +202,20 @@ float4 PS_UpsampleOnly3x3(float2 uv : TEXCOORD0) : COLOR
     return (sumCenter + sumCross + sumDiag) / 16.0;
 }
 
+
+// マスク付き合成
+// g_SrcTex  : ガウスフィルター後の画像
+// g_SrcTex2 : 元画像
+// g_MaskTex : 白 = ぼかす、黒 = 元画像のまま
+float4 PS_CompositeMaskedBlur(float2 uv : TEXCOORD0) : COLOR
+{
+    float4 blurColor = tex2D(SrcSampler, uv);
+    float4 originalColor = tex2D(SrcSampler2, uv);
+    float maskValue = tex2D(MaskSampler, uv).r;
+
+    return lerp(originalColor, blurColor, maskValue);
+}
+
 // 単純コピー（デバッグ用）
 float4 PS_Copy(float2 uv : TEXCOORD0) : COLOR
 {
@@ -219,6 +243,15 @@ technique UpsampleOnly3x3
     pass P0
     {
         PixelShader = compile ps_3_0 PS_UpsampleOnly3x3();
+    }
+}
+
+
+technique CompositeMaskedBlur
+{
+    pass P0
+    {
+        PixelShader = compile ps_3_0 PS_CompositeMaskedBlur();
     }
 }
 
