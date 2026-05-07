@@ -43,6 +43,7 @@ float g_filterSpacing = 1.0f;
 float g_effectFilterSpacing = 1.0f;
 float g_compositeBlend = 1.0f;
 int g_activeBlurLevels = kNumLevels;
+int g_blurStrength = 96;
 
 const int WINDOW_SIZE_W = 1600;
 const int WINDOW_SIZE_H = 900;
@@ -100,6 +101,7 @@ static void BuildUpChain(int levelCount);
 static void DrawBlendCurrentRT(LPDIRECT3DTEXTURE9 baseTex, LPDIRECT3DTEXTURE9 blurTex, float blend);
 static void DrawFullResolutionBlurTo(LPDIRECT3DTEXTURE9 targetTex);
 static float GetFilterSpacingForLevel(int level);
+static void ApplyBlurStrength();
 static void UpdateInput();
 static void DrawOverlayText();
 static void RenderSceneToTexture();
@@ -536,6 +538,22 @@ float GetFilterSpacingForLevel(int level)
     return (level == g_activeBlurLevels - 1) ? g_filterSpacing : 1.0f;
 }
 
+void ApplyBlurStrength()
+{
+    if (g_blurStrength < 0) { g_blurStrength = 0; }
+    if (g_blurStrength > 96) { g_blurStrength = 96; }
+
+    if (g_blurStrength == 96)
+    {
+        g_activeBlurLevels = kNumLevels;
+        g_compositeBlend = 1.0f;
+        return;
+    }
+
+    g_activeBlurLevels = g_blurStrength / 16;
+    g_compositeBlend = (float)(g_blurStrength % 16) / 16.0f;
+}
+
 void UpdateInput()
 {
     static DWORD lastInputTime = 0;
@@ -572,83 +590,32 @@ void UpdateInput()
     }
     if (key3)
     {
-        --g_activeBlurLevels;
+        g_blurStrength -= 16;
     }
     if (key4)
     {
-        ++g_activeBlurLevels;
+        g_blurStrength += 16;
     }
     if (key5)
     {
         g_filterSpacing -= 0.05f;
-        if (g_filterSpacing < 0.0f)
-        {
-            if (g_activeBlurLevels > 0)
-            {
-                --g_activeBlurLevels;
-                g_filterSpacing = 1.0f;
-            }
-            else
-            {
-                g_filterSpacing = 0.0f;
-            }
-        }
     }
     if (key6)
     {
         g_filterSpacing += 0.05f;
-        if (g_filterSpacing > 1.0f)
-        {
-            if (g_activeBlurLevels < kNumLevels)
-            {
-                ++g_activeBlurLevels;
-                g_filterSpacing = 0.0f;
-            }
-            else
-            {
-                g_filterSpacing = 1.0f;
-            }
-        }
     }
     if (key7)
     {
-        g_compositeBlend -= 0.05f;
-        if (g_compositeBlend < 0.0f)
-        {
-            if (g_activeBlurLevels > 0)
-            {
-                --g_activeBlurLevels;
-                g_compositeBlend = 1.0f;
-            }
-            else
-            {
-                g_compositeBlend = 0.0f;
-            }
-        }
+        --g_blurStrength;
     }
     if (key8)
     {
-        g_compositeBlend += 0.05f;
-        if (g_compositeBlend > 1.0f)
-        {
-            if (g_activeBlurLevels < kNumLevels)
-            {
-                ++g_activeBlurLevels;
-                g_compositeBlend = 0.0f;
-            }
-            else
-            {
-                g_compositeBlend = 1.0f;
-            }
-        }
+        ++g_blurStrength;
     }
 
     if (g_filterSpacing < 0.0f) { g_filterSpacing = 0.0f; }
     if (g_filterSpacing > 1.0f) { g_filterSpacing = 1.0f; }
-    if (g_compositeBlend < 0.0f) { g_compositeBlend = 0.0f; }
-    if (g_compositeBlend > 1.0f) { g_compositeBlend = 1.0f; }
-    if (g_activeBlurLevels < 0) { g_activeBlurLevels = 0; }
-    if (g_activeBlurLevels > kNumLevels) { g_activeBlurLevels = kNumLevels; }
+    ApplyBlurStrength();
 }
 
 void DrawOverlayText()
@@ -660,8 +627,9 @@ void DrawOverlayText()
 
     TCHAR text[256] = {};
     _stprintf_s(text,
-                _T("1/2: deepest spacing -/+\n3/4: blur levels -/+\n5/6: spacing strength -/+\n7/8: blend strength -/+\ndeepest 3x3 spacing: %.2f\nblend: %.2f\nblur levels: %d / %d"),
+                _T("1/2, 5/6: deepest spacing -/+\n3/4: blur strength +/- 16\n7/8: blur strength -/+\ndeepest 3x3 spacing: %.2f\nblur strength: %d / 96\nblend: %.2f\nblur levels: %d / %d"),
                 g_filterSpacing,
+                g_blurStrength,
                 g_compositeBlend,
                 g_activeBlurLevels,
                 kNumLevels);
