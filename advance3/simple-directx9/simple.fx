@@ -124,76 +124,120 @@ sampler SrcSampler2 = sampler_state
     AddressV  = CLAMP;
 };
 
-// 3x3 Gaussian 相当（1 2 1; 2 4 2; 1 2 1）を 16 で正規化
-float4 PS_Down3x3(float2 uv : TEXCOORD0) : COLOR
+float GaussianWeight11(int offset)
+{
+    int a = abs(offset);
+    if (a == 0) { return 252.0; }
+    if (a == 1) { return 210.0; }
+    if (a == 2) { return 120.0; }
+    if (a == 3) { return 45.0; }
+    if (a == 4) { return 10.0; }
+    return 1.0;
+}
+
+float4 Gaussian11x11(sampler srcSampler, float2 uv)
 {
     float2 ts = g_TexelSize * g_FilterSpacing;
+    float4 sum = 0.0;
 
-    float4 sumCenter = tex2D(SrcSampler, uv) * 4.0;
+    [unroll]
+    for (int y = -5; y <= 5; ++y)
+    {
+        float wy = GaussianWeight11(y);
 
-    float4 sumCross = 0.0;
-    sumCross += tex2D(SrcSampler, uv + float2(+ts.x, 0.0));
-    sumCross += tex2D(SrcSampler, uv + float2(-ts.x, 0.0));
-    sumCross += tex2D(SrcSampler, uv + float2(0.0, +ts.y));
-    sumCross += tex2D(SrcSampler, uv + float2(0.0, -ts.y));
+        [unroll]
+        for (int x = -5; x <= 5; ++x)
+        {
+            float wx = GaussianWeight11(x);
+            sum += tex2D(srcSampler, uv + float2((float)x * ts.x, (float)y * ts.y)) * (wx * wy);
+        }
+    }
 
-    float4 sumDiag = 0.0;
-    sumDiag += tex2D(SrcSampler, uv + ts) * 2.0;
-    sumDiag += tex2D(SrcSampler, uv + float2(+ts.x, -ts.y)) * 2.0;
-    sumDiag += tex2D(SrcSampler, uv + float2(-ts.x, +ts.y)) * 2.0;
-    sumDiag += tex2D(SrcSampler, uv - ts) * 2.0;
+    return sum / 1048576.0;
+}
 
-    return (sumCenter + sumCross + sumDiag) / 16.0;
+// 11x11 Gaussian 相当（binomial 10th row の2D積）を正規化
+float4 PS_Down11x11(float2 uv : TEXCOORD0) : COLOR
+{
+    return Gaussian11x11(SrcSampler, uv);
 }
 
 // 低レベルを3x3で広げつつアップサンプルし、ひとつ上のレベルを加算
-float4 PS_UpsampleAdd3x3(float2 uv : TEXCOORD0) : COLOR
+float4 PS_UpsampleAdd11x11(float2 uv : TEXCOORD0) : COLOR
 {
-    float2 ts = g_TexelSize * g_FilterSpacing;
-
-    float4 sumCenter = tex2D(SrcSampler, uv) * 4.0;
-
-    float4 sumCross = 0.0;
-    sumCross += tex2D(SrcSampler, uv + float2(+ts.x, 0.0));
-    sumCross += tex2D(SrcSampler, uv + float2(-ts.x, 0.0));
-    sumCross += tex2D(SrcSampler, uv + float2(0.0, +ts.y));
-    sumCross += tex2D(SrcSampler, uv + float2(0.0, -ts.y));
-
-    float4 sumDiag = 0.0;
-    sumDiag += tex2D(SrcSampler, uv + ts) * 2.0;
-    sumDiag += tex2D(SrcSampler, uv + float2(+ts.x, -ts.y)) * 2.0;
-    sumDiag += tex2D(SrcSampler, uv + float2(-ts.x, +ts.y)) * 2.0;
-    sumDiag += tex2D(SrcSampler, uv - ts) * 2.0;
-
-    float4 low = (sumCenter + sumCross + sumDiag) / 16.0;
+    float4 low = Gaussian11x11(SrcSampler, uv);
     float4 hi  = tex2D(SrcSampler2, uv);
 
     return low + hi;
 }
 
 // 低レベルだけでアップサンプル（最終段など）
-float4 PS_UpsampleOnly3x3(float2 uv : TEXCOORD0) : COLOR
+float4 PS_UpsampleOnly11x11(float2 uv : TEXCOORD0) : COLOR
+{
+    return Gaussian11x11(SrcSampler, uv);
+}
+
+// 単純コピー（デバッグ用）
+float4 Gaussian3x3(sampler srcSampler, float2 uv)
 {
     float2 ts = g_TexelSize * g_FilterSpacing;
-
-    float4 sumCenter = tex2D(SrcSampler, uv) * 4.0;
+    float4 sumCenter = tex2D(srcSampler, uv) * 4.0;
 
     float4 sumCross = 0.0;
-    sumCross += tex2D(SrcSampler, uv + float2(+ts.x, 0.0));
-    sumCross += tex2D(SrcSampler, uv + float2(-ts.x, 0.0));
-    sumCross += tex2D(SrcSampler, uv + float2(0.0, +ts.y));
-    sumCross += tex2D(SrcSampler, uv + float2(0.0, -ts.y));
+    sumCross += tex2D(srcSampler, uv + float2(+ts.x, 0.0)) * 2.0;
+    sumCross += tex2D(srcSampler, uv + float2(-ts.x, 0.0)) * 2.0;
+    sumCross += tex2D(srcSampler, uv + float2(0.0, +ts.y)) * 2.0;
+    sumCross += tex2D(srcSampler, uv + float2(0.0, -ts.y)) * 2.0;
 
     float4 sumDiag = 0.0;
-    sumDiag += tex2D(SrcSampler, uv + ts) * 2.0;
-    sumDiag += tex2D(SrcSampler, uv + float2(+ts.x, -ts.y)) * 2.0;
-    sumDiag += tex2D(SrcSampler, uv + float2(-ts.x, +ts.y)) * 2.0;
-    sumDiag += tex2D(SrcSampler, uv - ts) * 2.0;
+    sumDiag += tex2D(srcSampler, uv + ts);
+    sumDiag += tex2D(srcSampler, uv + float2(+ts.x, -ts.y));
+    sumDiag += tex2D(srcSampler, uv + float2(-ts.x, +ts.y));
+    sumDiag += tex2D(srcSampler, uv - ts);
 
     return (sumCenter + sumCross + sumDiag) / 16.0;
 }
 
-// 単純コピー（デバッグ用）
+float4 PS_Down3x3(float2 uv : TEXCOORD0) : COLOR
+{
+    return Gaussian3x3(SrcSampler, uv);
+}
+
+float4 PS_UpsampleAdd3x3(float2 uv : TEXCOORD0) : COLOR
+{
+    float4 low = Gaussian3x3(SrcSampler, uv);
+    float4 hi = tex2D(SrcSampler2, uv);
+    return low + hi;
+}
+
+float4 PS_UpsampleOnly3x3(float2 uv : TEXCOORD0) : COLOR
+{
+    return Gaussian3x3(SrcSampler, uv);
+}
+
+texture g_LevelTex0;
+texture g_LevelTex1;
+texture g_LevelTex2;
+texture g_LevelTex3;
+texture g_LevelTex4;
+
+sampler LevelSampler0 = sampler_state { Texture = <g_LevelTex0>; MinFilter = LINEAR; MagFilter = LINEAR; AddressU = CLAMP; AddressV = CLAMP; };
+sampler LevelSampler1 = sampler_state { Texture = <g_LevelTex1>; MinFilter = LINEAR; MagFilter = LINEAR; AddressU = CLAMP; AddressV = CLAMP; };
+sampler LevelSampler2 = sampler_state { Texture = <g_LevelTex2>; MinFilter = LINEAR; MagFilter = LINEAR; AddressU = CLAMP; AddressV = CLAMP; };
+sampler LevelSampler3 = sampler_state { Texture = <g_LevelTex3>; MinFilter = LINEAR; MagFilter = LINEAR; AddressU = CLAMP; AddressV = CLAMP; };
+sampler LevelSampler4 = sampler_state { Texture = <g_LevelTex4>; MinFilter = LINEAR; MagFilter = LINEAR; AddressU = CLAMP; AddressV = CLAMP; };
+
+float4 PS_CompositeLevels(float2 uv : TEXCOORD0) : COLOR
+{
+    float4 color = 0.0;
+    color += tex2D(LevelSampler0, uv);
+    color += tex2D(LevelSampler1, uv);
+    color += tex2D(LevelSampler2, uv);
+    color += tex2D(LevelSampler3, uv);
+    color += tex2D(LevelSampler4, uv);
+    return color / 5.0;
+}
+
 float4 PS_Copy(float2 uv : TEXCOORD0) : COLOR
 {
     return tex2D(SrcSampler, uv);
@@ -220,6 +264,14 @@ technique UpsampleOnly3x3
     pass P0
     {
         PixelShader = compile ps_3_0 PS_UpsampleOnly3x3();
+    }
+}
+
+technique CompositeLevels
+{
+    pass P0
+    {
+        PixelShader = compile ps_3_0 PS_CompositeLevels();
     }
 }
 

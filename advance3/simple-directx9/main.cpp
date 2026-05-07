@@ -29,16 +29,17 @@ LPDIRECT3DTEXTURE9 g_pSceneTex = NULL;
 LPDIRECT3DTEXTURE9 g_pTempTex = NULL;
 
 // 開始スケールを 1 / (2^kStartExp) にする
-static const int kStartExp = 3;
+static const int kStartExp = 1;
 
-// レベル数
-static const int kNumLevels = 3;
+// レベル数（1/2, 1/4, 1/8, 1/16, 1/32）
+static const int kNumLevels = 5;
 
 // 低解像度チェーン
 std::vector<LPDIRECT3DTEXTURE9> g_texDown;
 std::vector<LPDIRECT3DTEXTURE9> g_texUp;
 
 float g_filterSpacing = 1.0f;
+int g_activeBlurLevels = kNumLevels;
 
 const int WINDOW_SIZE_W = 1600;
 const int WINDOW_SIZE_H = 900;
@@ -313,7 +314,7 @@ void Render()
         IDirect3DSurface9* renderTarget = NULL;
         LPDIRECT3DTEXTURE9 sourceTex = g_pSceneTex;
 
-        for (int level = 0; level < kNumLevels; ++level)
+        for (int level = 0; level < g_activeBlurLevels; ++level)
         {
             g_texDown[level]->GetSurfaceLevel(0, &renderTarget);
             g_pd3dDevice->SetRenderTarget(0, renderTarget);
@@ -329,9 +330,10 @@ void Render()
     }
 
     // --- Up チェーン（純粋アップサンプル） ---
+    if (g_activeBlurLevels > 0)
     {
         IDirect3DSurface9* rt = NULL;
-        int last = kNumLevels - 1;
+        int last = g_activeBlurLevels - 1;
 
         // 最下段をコピー
         g_texUp[last]->GetSurfaceLevel(0, &rt);
@@ -397,8 +399,14 @@ void Render()
 
         g_pd3dDevice->Clear(0, NULL, D3DCLEAR_TARGET, 0, 1.0f, 0);
         g_pd3dDevice->BeginScene();
-        DrawFullscreenQuadCurrentRT(g_texUp[0], "UpsampleOnly3x3");
-//        DrawFullscreenQuadCurrentRT(g_texDown[7], "UpsampleOnly3x3");
+        if (g_activeBlurLevels == 0)
+        {
+            DrawFullscreenQuadCurrentRT(g_pSceneTex, "Copy");
+        }
+        else
+        {
+            DrawFullscreenQuadCurrentRT(g_texUp[0], "UpsampleOnly3x3");
+        }
         DrawOverlayText();
         g_pd3dDevice->EndScene();
     }
@@ -410,9 +418,13 @@ void UpdateInput()
 {
     static bool prevKey1 = false;
     static bool prevKey2 = false;
+    static bool prevKey3 = false;
+    static bool prevKey4 = false;
 
     const bool key1 = (GetAsyncKeyState('1') & 0x8000) != 0;
     const bool key2 = (GetAsyncKeyState('2') & 0x8000) != 0;
+    const bool key3 = (GetAsyncKeyState('3') & 0x8000) != 0;
+    const bool key4 = (GetAsyncKeyState('4') & 0x8000) != 0;
 
     if (key1 && !prevKey1)
     {
@@ -422,12 +434,24 @@ void UpdateInput()
     {
         g_filterSpacing += 0.05f;
     }
+    if (key3 && !prevKey3)
+    {
+        --g_activeBlurLevels;
+    }
+    if (key4 && !prevKey4)
+    {
+        ++g_activeBlurLevels;
+    }
 
     if (g_filterSpacing < 0.0f) { g_filterSpacing = 0.0f; }
     if (g_filterSpacing > 1.0f) { g_filterSpacing = 1.0f; }
+    if (g_activeBlurLevels < 0) { g_activeBlurLevels = 0; }
+    if (g_activeBlurLevels > kNumLevels) { g_activeBlurLevels = kNumLevels; }
 
     prevKey1 = key1;
     prevKey2 = key2;
+    prevKey3 = key3;
+    prevKey4 = key4;
 }
 
 void DrawOverlayText()
@@ -439,8 +463,10 @@ void DrawOverlayText()
 
     TCHAR text[256] = {};
     _stprintf_s(text,
-                _T("1: sample spacing -   2: sample spacing +\n3x3 spacing: %.2f"),
-                g_filterSpacing);
+                _T("1/2: sample spacing -/+\n3/4: blur levels -/+\n3x3 spacing: %.2f\nblur levels: %d / %d"),
+                g_filterSpacing,
+                g_activeBlurLevels,
+                kNumLevels);
 
     RECT shadowRect = { 17, 17, WINDOW_SIZE_W, WINDOW_SIZE_H };
     RECT textRect = { 16, 16, WINDOW_SIZE_W, WINDOW_SIZE_H };
