@@ -27,6 +27,7 @@ bool g_bClose = false;
 // オフスクリーン用
 LPDIRECT3DTEXTURE9 g_pSceneTex = NULL;
 LPDIRECT3DTEXTURE9 g_pTempTex = NULL;
+LPDIRECT3DTEXTURE9 g_pWeakTex = NULL;
 
 // 開始スケールを 1 / (2^kStartExp) にする
 static const int kStartExp = 1;
@@ -97,6 +98,7 @@ static void Render();
 static void DrawFullscreenQuad(LPDIRECT3DTEXTURE9 tex, const char* tech);
 static void BuildUpChain(int levelCount);
 static void DrawBlendCurrentRT(LPDIRECT3DTEXTURE9 baseTex, LPDIRECT3DTEXTURE9 blurTex, float blend);
+static void DrawFullResolutionBlurTo(LPDIRECT3DTEXTURE9 targetTex);
 static float GetFilterSpacingForLevel(int level);
 static void UpdateInput();
 static void DrawOverlayText();
@@ -260,6 +262,15 @@ void InitD3D(HWND hWnd)
                       D3DPOOL_DEFAULT,
                       &g_pTempTex);
 
+    D3DXCreateTexture(g_pd3dDevice,
+                      WINDOW_SIZE_W,
+                      WINDOW_SIZE_H,
+                      1,
+                      D3DUSAGE_RENDERTARGET,
+                      D3DFMT_A8R8G8B8,
+                      D3DPOOL_DEFAULT,
+                      &g_pWeakTex);
+
     g_texDown.assign(kNumLevels, NULL);
     g_texUp.assign(kNumLevels, NULL);
 
@@ -304,6 +315,7 @@ void Cleanup()
 
     SAFE_RELEASE(g_pSceneTex);
     SAFE_RELEASE(g_pTempTex);
+    SAFE_RELEASE(g_pWeakTex);
 
     SAFE_RELEASE(g_pd3dDevice);
     SAFE_RELEASE(g_pD3D);
@@ -368,7 +380,11 @@ void Render()
         }
     }
 
-    if (g_activeBlurLevels > 0 && g_compositeBlend < 1.0f)
+    if (g_activeBlurLevels == 0)
+    {
+        DrawFullResolutionBlurTo(g_pTempTex);
+    }
+    else if (g_activeBlurLevels > 0 && g_compositeBlend < 1.0f)
     {
         IDirect3DSurface9* tempRT = NULL;
         BuildUpChain(g_activeBlurLevels);
@@ -383,16 +399,20 @@ void Render()
 
         if (g_activeBlurLevels > 1)
         {
-            IDirect3DSurface9* sceneRT = NULL;
+            IDirect3DSurface9* weakRT = NULL;
             BuildUpChain(g_activeBlurLevels - 1);
-            g_pSceneTex->GetSurfaceLevel(0, &sceneRT);
-            g_pd3dDevice->SetRenderTarget(0, sceneRT);
-            SAFE_RELEASE(sceneRT);
+            g_pWeakTex->GetSurfaceLevel(0, &weakRT);
+            g_pd3dDevice->SetRenderTarget(0, weakRT);
+            SAFE_RELEASE(weakRT);
             g_pd3dDevice->Clear(0, NULL, D3DCLEAR_TARGET, 0, 1.0f, 0);
             g_pd3dDevice->BeginScene();
             g_effectFilterSpacing = 1.0f;
             DrawFullscreenQuadCurrentRT(g_texUp[0], "UpsampleOnly3x3");
             g_pd3dDevice->EndScene();
+        }
+        else
+        {
+            DrawFullResolutionBlurTo(g_pWeakTex);
         }
     }
     else
@@ -411,11 +431,11 @@ void Render()
         g_pd3dDevice->BeginScene();
         if (g_activeBlurLevels == 0)
         {
-            DrawFullscreenQuadCurrentRT(g_pSceneTex, "Copy");
+            DrawBlendCurrentRT(g_pSceneTex, g_pTempTex, g_compositeBlend);
         }
         else if (g_compositeBlend < 1.0f)
         {
-            DrawBlendCurrentRT(g_pSceneTex, g_pTempTex, g_compositeBlend);
+            DrawBlendCurrentRT(g_pWeakTex, g_pTempTex, g_compositeBlend);
         }
         else
         {
@@ -459,6 +479,20 @@ void BuildUpChain(int levelCount)
         DrawFullscreenQuadCurrentRT(g_texUp[level + 1], "UpsampleOnly3x3");
         g_pd3dDevice->EndScene();
     }
+}
+
+void DrawFullResolutionBlurTo(LPDIRECT3DTEXTURE9 targetTex)
+{
+    IDirect3DSurface9* targetRT = NULL;
+    targetTex->GetSurfaceLevel(0, &targetRT);
+    g_pd3dDevice->SetRenderTarget(0, targetRT);
+    SAFE_RELEASE(targetRT);
+
+    g_pd3dDevice->Clear(0, NULL, D3DCLEAR_TARGET, 0, 1.0f, 0);
+    g_pd3dDevice->BeginScene();
+    g_effectFilterSpacing = g_filterSpacing;
+    DrawFullscreenQuadCurrentRT(g_pSceneTex, "UpsampleOnly3x3");
+    g_pd3dDevice->EndScene();
 }
 
 void DrawBlendCurrentRT(LPDIRECT3DTEXTURE9 baseTex, LPDIRECT3DTEXTURE9 blurTex, float blend)
