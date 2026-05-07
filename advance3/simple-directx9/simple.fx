@@ -243,6 +243,23 @@ float4 PS_Copy(float2 uv : TEXCOORD0) : COLOR
     return tex2D(SrcSampler, uv);
 }
 
+texture g_BlendTex;
+sampler BlendSampler = sampler_state
+{
+    Texture = <g_BlendTex>;
+    MinFilter = LINEAR;
+    MagFilter = LINEAR;
+    AddressU = CLAMP;
+    AddressV = CLAMP;
+};
+
+float g_BlendAmount = 1.0f;
+
+float4 PS_BlendTwo(float2 uv : TEXCOORD0) : COLOR
+{
+    return lerp(tex2D(SrcSampler, uv), tex2D(BlendSampler, uv), g_BlendAmount);
+}
+
 technique Down3x3
 {
     pass P0
@@ -283,3 +300,10 @@ technique Copy
     }
 }
 
+technique BlendTwo
+{
+    pass P0
+    {
+        PixelShader = compile ps_3_0 PS_BlendTwo();
+    }
+}

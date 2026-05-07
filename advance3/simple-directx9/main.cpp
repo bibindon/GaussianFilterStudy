@@ -40,6 +40,7 @@ std::vector<LPDIRECT3DTEXTURE9> g_texUp;
 
 float g_filterSpacing = 1.0f;
 float g_effectFilterSpacing = 1.0f;
+float g_compositeBlend = 1.0f;
 int g_activeBlurLevels = kNumLevels;
 
 const int WINDOW_SIZE_W = 1600;
@@ -94,6 +95,8 @@ static void InitD3D(HWND hWnd);
 static void Cleanup();
 static void Render();
 static void DrawFullscreenQuad(LPDIRECT3DTEXTURE9 tex, const char* tech);
+static void BuildUpChain(int levelCount);
+static void DrawBlendCurrentRT(LPDIRECT3DTEXTURE9 baseTex, LPDIRECT3DTEXTURE9 blurTex, float blend);
 static float GetFilterSpacingForLevel(int level);
 static void UpdateInput();
 static void DrawOverlayText();
@@ -332,36 +335,6 @@ void Render()
         }
     }
 
-    // --- Up チェーン（純粋アップサンプル） ---
-    if (g_activeBlurLevels > 0)
-    {
-        IDirect3DSurface9* rt = NULL;
-        int last = g_activeBlurLevels - 1;
-
-        // 最下段をコピー
-        g_texUp[last]->GetSurfaceLevel(0, &rt);
-        g_pd3dDevice->SetRenderTarget(0, rt);
-        SAFE_RELEASE(rt);
-        g_pd3dDevice->Clear(0, NULL, D3DCLEAR_TARGET, 0, 1.0f, 0);
-        g_pd3dDevice->BeginScene();
-        DrawFullscreenQuadCurrentRT(g_texDown[last], "Copy");
-        g_pd3dDevice->EndScene();
-
-        // 各段：足し戻し無しで上へ
-        for (int level = last - 1; level >= 0; --level)
-        {
-            g_texUp[level]->GetSurfaceLevel(0, &rt);
-            g_pd3dDevice->SetRenderTarget(0, rt);
-            SAFE_RELEASE(rt);
-
-            g_pd3dDevice->Clear(0, NULL, D3DCLEAR_TARGET, 0, 1.0f, 0);
-            g_pd3dDevice->BeginScene();
-            g_effectFilterSpacing = GetFilterSpacingForLevel(level);
-            DrawFullscreenQuadCurrentRT(g_texUp[level + 1], "UpsampleOnly3x3");
-            g_pd3dDevice->EndScene();
-        }
-    }
-
     // Up チェーン
     if (false)
     {
@@ -395,7 +368,39 @@ void Render()
         }
     }
 
-    // 最終出力（フル解像度へアップサンプル）
+    if (g_activeBlurLevels > 0 && g_compositeBlend < 1.0f)
+    {
+        IDirect3DSurface9* tempRT = NULL;
+        BuildUpChain(g_activeBlurLevels);
+        g_pTempTex->GetSurfaceLevel(0, &tempRT);
+        g_pd3dDevice->SetRenderTarget(0, tempRT);
+        SAFE_RELEASE(tempRT);
+        g_pd3dDevice->Clear(0, NULL, D3DCLEAR_TARGET, 0, 1.0f, 0);
+        g_pd3dDevice->BeginScene();
+        g_effectFilterSpacing = 1.0f;
+        DrawFullscreenQuadCurrentRT(g_texUp[0], "UpsampleOnly3x3");
+        g_pd3dDevice->EndScene();
+
+        if (g_activeBlurLevels > 1)
+        {
+            IDirect3DSurface9* sceneRT = NULL;
+            BuildUpChain(g_activeBlurLevels - 1);
+            g_pSceneTex->GetSurfaceLevel(0, &sceneRT);
+            g_pd3dDevice->SetRenderTarget(0, sceneRT);
+            SAFE_RELEASE(sceneRT);
+            g_pd3dDevice->Clear(0, NULL, D3DCLEAR_TARGET, 0, 1.0f, 0);
+            g_pd3dDevice->BeginScene();
+            g_effectFilterSpacing = 1.0f;
+            DrawFullscreenQuadCurrentRT(g_texUp[0], "UpsampleOnly3x3");
+            g_pd3dDevice->EndScene();
+        }
+    }
+    else
+    {
+        BuildUpChain(g_activeBlurLevels);
+    }
+
+    // 最終出力
     {
         IDirect3DSurface9* backBuffer = NULL;
         g_pd3dDevice->GetBackBuffer(0, 0, D3DBACKBUFFER_TYPE_MONO, &backBuffer);
@@ -408,6 +413,10 @@ void Render()
         {
             DrawFullscreenQuadCurrentRT(g_pSceneTex, "Copy");
         }
+        else if (g_compositeBlend < 1.0f)
+        {
+            DrawBlendCurrentRT(g_pSceneTex, g_pTempTex, g_compositeBlend);
+        }
         else
         {
             g_effectFilterSpacing = 1.0f;
@@ -418,6 +427,69 @@ void Render()
     }
 
     g_pd3dDevice->Present(NULL, NULL, NULL, NULL);
+}
+
+void BuildUpChain(int levelCount)
+{
+    if (levelCount <= 0)
+    {
+        return;
+    }
+
+    IDirect3DSurface9* rt = NULL;
+    int last = levelCount - 1;
+
+    g_texUp[last]->GetSurfaceLevel(0, &rt);
+    g_pd3dDevice->SetRenderTarget(0, rt);
+    SAFE_RELEASE(rt);
+    g_pd3dDevice->Clear(0, NULL, D3DCLEAR_TARGET, 0, 1.0f, 0);
+    g_pd3dDevice->BeginScene();
+    DrawFullscreenQuadCurrentRT(g_texDown[last], "Copy");
+    g_pd3dDevice->EndScene();
+
+    for (int level = last - 1; level >= 0; --level)
+    {
+        g_texUp[level]->GetSurfaceLevel(0, &rt);
+        g_pd3dDevice->SetRenderTarget(0, rt);
+        SAFE_RELEASE(rt);
+
+        g_pd3dDevice->Clear(0, NULL, D3DCLEAR_TARGET, 0, 1.0f, 0);
+        g_pd3dDevice->BeginScene();
+        g_effectFilterSpacing = GetFilterSpacingForLevel(level);
+        DrawFullscreenQuadCurrentRT(g_texUp[level + 1], "UpsampleOnly3x3");
+        g_pd3dDevice->EndScene();
+    }
+}
+
+void DrawBlendCurrentRT(LPDIRECT3DTEXTURE9 baseTex, LPDIRECT3DTEXTURE9 blurTex, float blend)
+{
+    IDirect3DSurface9* pRT = NULL;
+    g_pd3dDevice->GetRenderTarget(0, &pRT);
+    D3DSURFACE_DESC rtDesc = {};
+    pRT->GetDesc(&rtDesc);
+    SAFE_RELEASE(pRT);
+
+    g_pEffect->SetTechnique("BlendTwo");
+    g_pEffect->SetTexture("g_SrcTex", baseTex);
+    g_pEffect->SetTexture("g_BlendTex", blurTex);
+    g_pEffect->SetFloat("g_BlendAmount", blend);
+
+    ScreenVertex quad[4] =
+    {
+        {                -0.5f,                 -0.5f, 0, 1, 0, 0 },
+        { (float)rtDesc.Width  - 0.5f,         -0.5f, 0, 1, 1, 0 },
+        {                -0.5f, (float)rtDesc.Height - 0.5f, 0, 1, 0, 1 },
+        { (float)rtDesc.Width  - 0.5f, (float)rtDesc.Height - 0.5f, 0, 1, 1, 1 }
+    };
+
+    g_pd3dDevice->SetRenderState(D3DRS_ZENABLE, FALSE);
+    g_pd3dDevice->SetFVF(FVF_SCREENVERTEX);
+    g_pEffect->Begin(NULL, 0);
+    g_pEffect->BeginPass(0);
+    g_pd3dDevice->DrawPrimitiveUP(D3DPT_TRIANGLESTRIP, 2, quad, sizeof(ScreenVertex));
+    g_pEffect->EndPass();
+    g_pEffect->End();
+    g_pd3dDevice->SetRenderState(D3DRS_ZENABLE, TRUE);
 }
 
 float GetFilterSpacingForLevel(int level)
@@ -442,8 +514,10 @@ void UpdateInput()
     const bool key4 = (GetAsyncKeyState('4') & 0x8000) != 0;
     const bool key5 = (GetAsyncKeyState('5') & 0x8000) != 0;
     const bool key6 = (GetAsyncKeyState('6') & 0x8000) != 0;
+    const bool key7 = (GetAsyncKeyState('7') & 0x8000) != 0;
+    const bool key8 = (GetAsyncKeyState('8') & 0x8000) != 0;
 
-    if (!key1 && !key2 && !key3 && !key4 && !key5 && !key6)
+    if (!key1 && !key2 && !key3 && !key4 && !key5 && !key6 && !key7 && !key8)
     {
         lastInputTime = 0;
         return;
@@ -502,9 +576,43 @@ void UpdateInput()
             }
         }
     }
+    if (key7)
+    {
+        g_compositeBlend -= 0.05f;
+        if (g_compositeBlend < 0.0f)
+        {
+            if (g_activeBlurLevels > 0)
+            {
+                --g_activeBlurLevels;
+                g_compositeBlend = 1.0f;
+            }
+            else
+            {
+                g_compositeBlend = 0.0f;
+            }
+        }
+    }
+    if (key8)
+    {
+        g_compositeBlend += 0.05f;
+        if (g_compositeBlend > 1.0f)
+        {
+            if (g_activeBlurLevels < kNumLevels)
+            {
+                ++g_activeBlurLevels;
+                g_compositeBlend = 0.0f;
+            }
+            else
+            {
+                g_compositeBlend = 1.0f;
+            }
+        }
+    }
 
     if (g_filterSpacing < 0.0f) { g_filterSpacing = 0.0f; }
     if (g_filterSpacing > 1.0f) { g_filterSpacing = 1.0f; }
+    if (g_compositeBlend < 0.0f) { g_compositeBlend = 0.0f; }
+    if (g_compositeBlend > 1.0f) { g_compositeBlend = 1.0f; }
     if (g_activeBlurLevels < 0) { g_activeBlurLevels = 0; }
     if (g_activeBlurLevels > kNumLevels) { g_activeBlurLevels = kNumLevels; }
 }
@@ -518,8 +626,9 @@ void DrawOverlayText()
 
     TCHAR text[256] = {};
     _stprintf_s(text,
-                _T("1/2: deepest spacing -/+\n3/4: blur levels -/+\n5/6: combined strength -/+\ndeepest 3x3 spacing: %.2f\nblur levels: %d / %d"),
+                _T("1/2: deepest spacing -/+\n3/4: blur levels -/+\n5/6: spacing strength -/+\n7/8: blend strength -/+\ndeepest 3x3 spacing: %.2f\nblend: %.2f\nblur levels: %d / %d"),
                 g_filterSpacing,
+                g_compositeBlend,
                 g_activeBlurLevels,
                 kNumLevels);
 
