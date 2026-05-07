@@ -52,6 +52,7 @@ technique Technique1
 // σ=40, 離散和(間引き)で正規化済み（1D和=1）
 // ============================
 float2 g_TexelSize;
+float g_FilterSpacing = 1.0f;
 texture g_SrcTex;
 sampler SrcSampler = sampler_state
 {
@@ -126,7 +127,7 @@ sampler SrcSampler2 = sampler_state
 // 3x3 Gaussian 相当（1 2 1; 2 4 2; 1 2 1）を 16 で正規化
 float4 PS_Down3x3(float2 uv : TEXCOORD0) : COLOR
 {
-    float2 ts = g_TexelSize;
+    float2 ts = g_TexelSize * g_FilterSpacing;
 
     float4 sumCenter = tex2D(SrcSampler, uv) * 4.0;
 
@@ -148,7 +149,7 @@ float4 PS_Down3x3(float2 uv : TEXCOORD0) : COLOR
 // 低レベルを3x3で広げつつアップサンプルし、ひとつ上のレベルを加算
 float4 PS_UpsampleAdd3x3(float2 uv : TEXCOORD0) : COLOR
 {
-    float2 ts = g_TexelSize;
+    float2 ts = g_TexelSize * g_FilterSpacing;
 
     float4 sumCenter = tex2D(SrcSampler, uv) * 4.0;
 
@@ -173,7 +174,7 @@ float4 PS_UpsampleAdd3x3(float2 uv : TEXCOORD0) : COLOR
 // 低レベルだけでアップサンプル（最終段など）
 float4 PS_UpsampleOnly3x3(float2 uv : TEXCOORD0) : COLOR
 {
-    float2 ts = g_TexelSize;
+    float2 ts = g_TexelSize * g_FilterSpacing;
 
     float4 sumCenter = tex2D(SrcSampler, uv) * 4.0;
 

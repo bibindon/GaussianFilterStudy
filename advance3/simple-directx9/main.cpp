@@ -21,6 +21,7 @@ std::vector<D3DMATERIAL9> g_pMaterials;
 std::vector<LPDIRECT3DTEXTURE9> g_pTextures;
 DWORD g_dwNumMaterials = 0;
 LPD3DXEFFECT g_pEffect = NULL;
+LPD3DXFONT g_pFont = NULL;
 bool g_bClose = false;
 
 // オフスクリーン用
@@ -36,6 +37,8 @@ static const int kNumLevels = 3;
 // 低解像度チェーン
 std::vector<LPDIRECT3DTEXTURE9> g_texDown;
 std::vector<LPDIRECT3DTEXTURE9> g_texUp;
+
+float g_filterSpacing = 1.0f;
 
 const int WINDOW_SIZE_W = 1600;
 const int WINDOW_SIZE_H = 900;
@@ -64,6 +67,7 @@ static void DrawFullscreenQuadCurrentRT(LPDIRECT3DTEXTURE9 srcTex, const char* t
     g_pEffect->SetTechnique(tech);
     g_pEffect->SetTexture("g_SrcTex", srcTex);
     g_pEffect->SetFloatArray("g_TexelSize", texelSize, 2);
+    g_pEffect->SetFloat("g_FilterSpacing", g_filterSpacing);
 
     ScreenVertex quad[4] =
     {
@@ -88,6 +92,8 @@ static void InitD3D(HWND hWnd);
 static void Cleanup();
 static void Render();
 static void DrawFullscreenQuad(LPDIRECT3DTEXTURE9 tex, const char* tech);
+static void UpdateInput();
+static void DrawOverlayText();
 static void RenderSceneToTexture();
 
 LRESULT WINAPI MsgProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam);
@@ -215,6 +221,20 @@ void InitD3D(HWND hWnd)
                                   NULL);
     assert(SUCCEEDED(hr));
 
+    hr = D3DXCreateFont(g_pd3dDevice,
+                        22,
+                        0,
+                        FW_NORMAL,
+                        1,
+                        FALSE,
+                        DEFAULT_CHARSET,
+                        OUT_DEFAULT_PRECIS,
+                        DEFAULT_QUALITY,
+                        DEFAULT_PITCH | FF_DONTCARE,
+                        _T("MS Gothic"),
+                        &g_pFont);
+    assert(SUCCEEDED(hr));
+
     // オフスクリーン用テクスチャ（サーフェイスは毎回ローカル取得）
     D3DXCreateTexture(g_pd3dDevice,
                       WINDOW_SIZE_W,
@@ -273,6 +293,7 @@ void Cleanup()
     }
 
     SAFE_RELEASE(g_pMesh);
+    SAFE_RELEASE(g_pFont);
     SAFE_RELEASE(g_pEffect);
 
     SAFE_RELEASE(g_pSceneTex);
@@ -284,6 +305,7 @@ void Cleanup()
 
 void Render()
 {
+    UpdateInput();
     RenderSceneToTexture();
 
     // Down チェーン
@@ -377,10 +399,54 @@ void Render()
         g_pd3dDevice->BeginScene();
         DrawFullscreenQuadCurrentRT(g_texUp[0], "UpsampleOnly3x3");
 //        DrawFullscreenQuadCurrentRT(g_texDown[7], "UpsampleOnly3x3");
+        DrawOverlayText();
         g_pd3dDevice->EndScene();
     }
 
     g_pd3dDevice->Present(NULL, NULL, NULL, NULL);
+}
+
+void UpdateInput()
+{
+    static bool prevKey1 = false;
+    static bool prevKey2 = false;
+
+    const bool key1 = (GetAsyncKeyState('1') & 0x8000) != 0;
+    const bool key2 = (GetAsyncKeyState('2') & 0x8000) != 0;
+
+    if (key1 && !prevKey1)
+    {
+        g_filterSpacing -= 0.05f;
+    }
+    if (key2 && !prevKey2)
+    {
+        g_filterSpacing += 0.05f;
+    }
+
+    if (g_filterSpacing < 0.0f) { g_filterSpacing = 0.0f; }
+    if (g_filterSpacing > 1.0f) { g_filterSpacing = 1.0f; }
+
+    prevKey1 = key1;
+    prevKey2 = key2;
+}
+
+void DrawOverlayText()
+{
+    if (g_pFont == NULL)
+    {
+        return;
+    }
+
+    TCHAR text[256] = {};
+    _stprintf_s(text,
+                _T("1: sample spacing -   2: sample spacing +\n3x3 spacing: %.2f"),
+                g_filterSpacing);
+
+    RECT shadowRect = { 17, 17, WINDOW_SIZE_W, WINDOW_SIZE_H };
+    RECT textRect = { 16, 16, WINDOW_SIZE_W, WINDOW_SIZE_H };
+
+    g_pFont->DrawText(NULL, text, -1, &shadowRect, DT_LEFT | DT_TOP, D3DCOLOR_ARGB(220, 0, 0, 0));
+    g_pFont->DrawText(NULL, text, -1, &textRect, DT_LEFT | DT_TOP, D3DCOLOR_ARGB(255, 255, 255, 255));
 }
 
 void RenderSceneToTexture()
@@ -440,6 +506,7 @@ void DrawFullscreenQuad(LPDIRECT3DTEXTURE9 tex, const char* tech)
 
     float texelSize[2] = { 1.0f / WINDOW_SIZE_W, 1.0f / WINDOW_SIZE_H };
     g_pEffect->SetFloatArray("g_TexelSize", texelSize, 2);
+    g_pEffect->SetFloat("g_FilterSpacing", g_filterSpacing);
 
     ScreenVertex quad[4] = {
         {                -0.5f,                -0.5f, 0, 1, 0, 0 },
