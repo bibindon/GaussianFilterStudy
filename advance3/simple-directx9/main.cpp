@@ -39,6 +39,7 @@ std::vector<LPDIRECT3DTEXTURE9> g_texDown;
 std::vector<LPDIRECT3DTEXTURE9> g_texUp;
 
 float g_filterSpacing = 1.0f;
+float g_effectFilterSpacing = 1.0f;
 int g_activeBlurLevels = kNumLevels;
 
 const int WINDOW_SIZE_W = 1600;
@@ -68,7 +69,7 @@ static void DrawFullscreenQuadCurrentRT(LPDIRECT3DTEXTURE9 srcTex, const char* t
     g_pEffect->SetTechnique(tech);
     g_pEffect->SetTexture("g_SrcTex", srcTex);
     g_pEffect->SetFloatArray("g_TexelSize", texelSize, 2);
-    g_pEffect->SetFloat("g_FilterSpacing", g_filterSpacing);
+    g_pEffect->SetFloat("g_FilterSpacing", g_effectFilterSpacing);
 
     ScreenVertex quad[4] =
     {
@@ -93,6 +94,7 @@ static void InitD3D(HWND hWnd);
 static void Cleanup();
 static void Render();
 static void DrawFullscreenQuad(LPDIRECT3DTEXTURE9 tex, const char* tech);
+static float GetFilterSpacingForLevel(int level);
 static void UpdateInput();
 static void DrawOverlayText();
 static void RenderSceneToTexture();
@@ -322,6 +324,7 @@ void Render()
 
             g_pd3dDevice->Clear(0, NULL, D3DCLEAR_TARGET, 0, 1.0f, 0);
             g_pd3dDevice->BeginScene();
+            g_effectFilterSpacing = GetFilterSpacingForLevel(level);
             DrawFullscreenQuadCurrentRT(sourceTex, "Down3x3");
             g_pd3dDevice->EndScene();
 
@@ -353,6 +356,7 @@ void Render()
 
             g_pd3dDevice->Clear(0, NULL, D3DCLEAR_TARGET, 0, 1.0f, 0);
             g_pd3dDevice->BeginScene();
+            g_effectFilterSpacing = GetFilterSpacingForLevel(level);
             DrawFullscreenQuadCurrentRT(g_texUp[level + 1], "UpsampleOnly3x3");
             g_pd3dDevice->EndScene();
         }
@@ -385,6 +389,7 @@ void Render()
 
             g_pd3dDevice->Clear(0, NULL, D3DCLEAR_TARGET, 0, 1.0f, 0);
             g_pd3dDevice->BeginScene();
+            g_effectFilterSpacing = GetFilterSpacingForLevel(level);
             DrawFullscreenQuadCurrentRT(g_texUp[level + 1], "UpsampleAdd3x3");
             g_pd3dDevice->EndScene();
         }
@@ -405,6 +410,7 @@ void Render()
         }
         else
         {
+            g_effectFilterSpacing = 1.0f;
             DrawFullscreenQuadCurrentRT(g_texUp[0], "UpsampleOnly3x3");
         }
         DrawOverlayText();
@@ -414,44 +420,93 @@ void Render()
     g_pd3dDevice->Present(NULL, NULL, NULL, NULL);
 }
 
+float GetFilterSpacingForLevel(int level)
+{
+    if (g_activeBlurLevels <= 0)
+    {
+        return 1.0f;
+    }
+
+    return (level == g_activeBlurLevels - 1) ? g_filterSpacing : 1.0f;
+}
+
 void UpdateInput()
 {
-    static bool prevKey1 = false;
-    static bool prevKey2 = false;
-    static bool prevKey3 = false;
-    static bool prevKey4 = false;
+    static DWORD lastInputTime = 0;
+    const DWORD now = GetTickCount();
+    const DWORD repeatMs = 80;
 
     const bool key1 = (GetAsyncKeyState('1') & 0x8000) != 0;
     const bool key2 = (GetAsyncKeyState('2') & 0x8000) != 0;
     const bool key3 = (GetAsyncKeyState('3') & 0x8000) != 0;
     const bool key4 = (GetAsyncKeyState('4') & 0x8000) != 0;
+    const bool key5 = (GetAsyncKeyState('5') & 0x8000) != 0;
+    const bool key6 = (GetAsyncKeyState('6') & 0x8000) != 0;
 
-    if (key1 && !prevKey1)
+    if (!key1 && !key2 && !key3 && !key4 && !key5 && !key6)
+    {
+        lastInputTime = 0;
+        return;
+    }
+    if (lastInputTime != 0 && now - lastInputTime < repeatMs)
+    {
+        return;
+    }
+    lastInputTime = now;
+
+    if (key1)
     {
         g_filterSpacing -= 0.05f;
     }
-    if (key2 && !prevKey2)
+    if (key2)
     {
         g_filterSpacing += 0.05f;
     }
-    if (key3 && !prevKey3)
+    if (key3)
     {
         --g_activeBlurLevels;
     }
-    if (key4 && !prevKey4)
+    if (key4)
     {
         ++g_activeBlurLevels;
+    }
+    if (key5)
+    {
+        g_filterSpacing -= 0.05f;
+        if (g_filterSpacing < 0.0f)
+        {
+            if (g_activeBlurLevels > 0)
+            {
+                --g_activeBlurLevels;
+                g_filterSpacing = 1.0f;
+            }
+            else
+            {
+                g_filterSpacing = 0.0f;
+            }
+        }
+    }
+    if (key6)
+    {
+        g_filterSpacing += 0.05f;
+        if (g_filterSpacing > 1.0f)
+        {
+            if (g_activeBlurLevels < kNumLevels)
+            {
+                ++g_activeBlurLevels;
+                g_filterSpacing = 0.0f;
+            }
+            else
+            {
+                g_filterSpacing = 1.0f;
+            }
+        }
     }
 
     if (g_filterSpacing < 0.0f) { g_filterSpacing = 0.0f; }
     if (g_filterSpacing > 1.0f) { g_filterSpacing = 1.0f; }
     if (g_activeBlurLevels < 0) { g_activeBlurLevels = 0; }
     if (g_activeBlurLevels > kNumLevels) { g_activeBlurLevels = kNumLevels; }
-
-    prevKey1 = key1;
-    prevKey2 = key2;
-    prevKey3 = key3;
-    prevKey4 = key4;
 }
 
 void DrawOverlayText()
@@ -463,7 +518,7 @@ void DrawOverlayText()
 
     TCHAR text[256] = {};
     _stprintf_s(text,
-                _T("1/2: sample spacing -/+\n3/4: blur levels -/+\n3x3 spacing: %.2f\nblur levels: %d / %d"),
+                _T("1/2: deepest spacing -/+\n3/4: blur levels -/+\n5/6: combined strength -/+\ndeepest 3x3 spacing: %.2f\nblur levels: %d / %d"),
                 g_filterSpacing,
                 g_activeBlurLevels,
                 kNumLevels);
@@ -532,7 +587,7 @@ void DrawFullscreenQuad(LPDIRECT3DTEXTURE9 tex, const char* tech)
 
     float texelSize[2] = { 1.0f / WINDOW_SIZE_W, 1.0f / WINDOW_SIZE_H };
     g_pEffect->SetFloatArray("g_TexelSize", texelSize, 2);
-    g_pEffect->SetFloat("g_FilterSpacing", g_filterSpacing);
+    g_pEffect->SetFloat("g_FilterSpacing", g_effectFilterSpacing);
 
     ScreenVertex quad[4] = {
         {                -0.5f,                -0.5f, 0, 1, 0, 0 },
