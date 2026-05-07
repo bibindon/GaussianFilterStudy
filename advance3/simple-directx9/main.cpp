@@ -99,14 +99,15 @@ static void InitD3D(HWND hWnd);
 static void Cleanup();
 static void Render();
 static void DrawFullscreenQuad(LPDIRECT3DTEXTURE9 tex, const char* tech);
-static void BuildDownChain(int levelCount);
-static void BuildUpChain(int levelCount);
+static void BuildDownChain(int firstLevel, int lastLevel);
+static void BuildUpChain(int firstLevel, int lastLevel);
 static void DrawBlendCurrentRT(LPDIRECT3DTEXTURE9 baseTex, LPDIRECT3DTEXTURE9 blurTex, float blend);
 static void DrawFullResolutionBlurTo(LPDIRECT3DTEXTURE9 targetTex);
 static void DrawCopyTo(LPDIRECT3DTEXTURE9 sourceTex, LPDIRECT3DTEXTURE9 targetTex);
-static void DrawLowResBlurTo(int levelCount, LPDIRECT3DTEXTURE9 targetTex);
+static void DrawLowResBlurTo(int actualStage, LPDIRECT3DTEXTURE9 targetTex);
 static int GetAvailableStageCount();
 static int GetActualStageForIndex(int stageIndex);
+static int GetFirstLowResLevel();
 static void RenderStageToTexture(int actualStage, LPDIRECT3DTEXTURE9 targetTex);
 static float GetFilterSpacingForLevel(int level);
 static void ApplyBlurStrength();
@@ -369,9 +370,9 @@ void Render()
     g_pd3dDevice->Present(NULL, NULL, NULL, NULL);
 }
 
-void BuildDownChain(int levelCount)
+void BuildDownChain(int firstLevel, int lastLevel)
 {
-    if (levelCount <= 0)
+    if (lastLevel < firstLevel || firstLevel < 0)
     {
         return;
     }
@@ -379,7 +380,7 @@ void BuildDownChain(int levelCount)
     IDirect3DSurface9* renderTarget = NULL;
     LPDIRECT3DTEXTURE9 sourceTex = g_pSceneTex;
 
-    for (int level = 0; level < levelCount; ++level)
+    for (int level = firstLevel; level <= lastLevel; ++level)
     {
         g_texDown[level]->GetSurfaceLevel(0, &renderTarget);
         g_pd3dDevice->SetRenderTarget(0, renderTarget);
@@ -387,7 +388,7 @@ void BuildDownChain(int levelCount)
 
         g_pd3dDevice->Clear(0, NULL, D3DCLEAR_TARGET, 0, 1.0f, 0);
         g_pd3dDevice->BeginScene();
-        g_effectLevelCount = levelCount;
+        g_effectLevelCount = lastLevel + 1;
         g_effectFilterSpacing = GetFilterSpacingForLevel(level);
         DrawFullscreenQuadCurrentRT(sourceTex, "Down3x3");
         g_pd3dDevice->EndScene();
@@ -396,15 +397,15 @@ void BuildDownChain(int levelCount)
     }
 }
 
-void BuildUpChain(int levelCount)
+void BuildUpChain(int firstLevel, int lastLevel)
 {
-    if (levelCount <= 0)
+    if (lastLevel < firstLevel || firstLevel < 0)
     {
         return;
     }
 
     IDirect3DSurface9* rt = NULL;
-    int last = levelCount - 1;
+    int last = lastLevel;
 
     g_texUp[last]->GetSurfaceLevel(0, &rt);
     g_pd3dDevice->SetRenderTarget(0, rt);
@@ -414,7 +415,7 @@ void BuildUpChain(int levelCount)
     DrawFullscreenQuadCurrentRT(g_texDown[last], "Copy");
     g_pd3dDevice->EndScene();
 
-    for (int level = last - 1; level >= 0; --level)
+    for (int level = last - 1; level >= firstLevel; --level)
     {
         g_texUp[level]->GetSurfaceLevel(0, &rt);
         g_pd3dDevice->SetRenderTarget(0, rt);
@@ -422,7 +423,7 @@ void BuildUpChain(int levelCount)
 
         g_pd3dDevice->Clear(0, NULL, D3DCLEAR_TARGET, 0, 1.0f, 0);
         g_pd3dDevice->BeginScene();
-        g_effectLevelCount = levelCount;
+        g_effectLevelCount = lastLevel + 1;
         g_effectFilterSpacing = GetFilterSpacingForLevel(level);
         DrawFullscreenQuadCurrentRT(g_texUp[level + 1], "UpsampleOnly3x3");
         g_pd3dDevice->EndScene();
@@ -457,10 +458,13 @@ void DrawFullResolutionBlurTo(LPDIRECT3DTEXTURE9 targetTex)
     g_pd3dDevice->EndScene();
 }
 
-void DrawLowResBlurTo(int levelCount, LPDIRECT3DTEXTURE9 targetTex)
+void DrawLowResBlurTo(int actualStage, LPDIRECT3DTEXTURE9 targetTex)
 {
-    BuildDownChain(levelCount);
-    BuildUpChain(levelCount);
+    const int firstLevel = GetFirstLowResLevel();
+    const int lastLevel = actualStage - 2;
+
+    BuildDownChain(firstLevel, lastLevel);
+    BuildUpChain(firstLevel, lastLevel);
 
     IDirect3DSurface9* targetRT = NULL;
     targetTex->GetSurfaceLevel(0, &targetRT);
@@ -470,7 +474,7 @@ void DrawLowResBlurTo(int levelCount, LPDIRECT3DTEXTURE9 targetTex)
     g_pd3dDevice->Clear(0, NULL, D3DCLEAR_TARGET, 0, 1.0f, 0);
     g_pd3dDevice->BeginScene();
     g_effectFilterSpacing = 1.0f;
-    DrawFullscreenQuadCurrentRT(g_texUp[0], "UpsampleOnly3x3");
+    DrawFullscreenQuadCurrentRT(g_texUp[firstLevel], "UpsampleOnly3x3");
     g_pd3dDevice->EndScene();
 }
 
@@ -489,6 +493,12 @@ int GetActualStageForIndex(int stageIndex)
     return stageIndex + g_skipBaseLevels;
 }
 
+int GetFirstLowResLevel()
+{
+    const int firstLevel = g_skipBaseLevels - 1;
+    return (firstLevel > 0) ? firstLevel : 0;
+}
+
 void RenderStageToTexture(int actualStage, LPDIRECT3DTEXTURE9 targetTex)
 {
     if (actualStage <= 0)
@@ -503,7 +513,7 @@ void RenderStageToTexture(int actualStage, LPDIRECT3DTEXTURE9 targetTex)
         return;
     }
 
-    DrawLowResBlurTo(actualStage - 1, targetTex);
+    DrawLowResBlurTo(actualStage, targetTex);
 }
 
 void DrawBlendCurrentRT(LPDIRECT3DTEXTURE9 baseTex, LPDIRECT3DTEXTURE9 blurTex, float blend)
