@@ -44,6 +44,8 @@ float g_effectFilterSpacing = 1.0f;
 float g_compositeBlend = 1.0f;
 int g_activeBlurLevels = kNumLevels;
 int g_blurStrength = 96;
+int g_skipBaseLevels = 0;
+int g_effectLevelCount = 0;
 
 const int WINDOW_SIZE_W = 1600;
 const int WINDOW_SIZE_H = 900;
@@ -97,9 +99,15 @@ static void InitD3D(HWND hWnd);
 static void Cleanup();
 static void Render();
 static void DrawFullscreenQuad(LPDIRECT3DTEXTURE9 tex, const char* tech);
+static void BuildDownChain(int levelCount);
 static void BuildUpChain(int levelCount);
 static void DrawBlendCurrentRT(LPDIRECT3DTEXTURE9 baseTex, LPDIRECT3DTEXTURE9 blurTex, float blend);
 static void DrawFullResolutionBlurTo(LPDIRECT3DTEXTURE9 targetTex);
+static void DrawCopyTo(LPDIRECT3DTEXTURE9 sourceTex, LPDIRECT3DTEXTURE9 targetTex);
+static void DrawLowResBlurTo(int levelCount, LPDIRECT3DTEXTURE9 targetTex);
+static int GetAvailableStageCount();
+static int GetActualStageForIndex(int stageIndex);
+static void RenderStageToTexture(int actualStage, LPDIRECT3DTEXTURE9 targetTex);
 static float GetFilterSpacingForLevel(int level);
 static void ApplyBlurStrength();
 static void UpdateInput();
@@ -328,99 +336,21 @@ void Render()
     UpdateInput();
     RenderSceneToTexture();
 
-    // Down チェーン
-    {
-        IDirect3DSurface9* renderTarget = NULL;
-        LPDIRECT3DTEXTURE9 sourceTex = g_pSceneTex;
+    const int availableStageCount = GetAvailableStageCount();
+    const float stagePosition = ((float)g_blurStrength / 96.0f) * (float)(availableStageCount - 1);
+    int weakStageIndex = (int)stagePosition;
+    if (weakStageIndex < 0) { weakStageIndex = 0; }
+    if (weakStageIndex > availableStageCount - 1) { weakStageIndex = availableStageCount - 1; }
 
-        for (int level = 0; level < g_activeBlurLevels; ++level)
-        {
-            g_texDown[level]->GetSurfaceLevel(0, &renderTarget);
-            g_pd3dDevice->SetRenderTarget(0, renderTarget);
-            SAFE_RELEASE(renderTarget);
+    int strongStageIndex = weakStageIndex + 1;
+    if (strongStageIndex > availableStageCount - 1) { strongStageIndex = availableStageCount - 1; }
 
-            g_pd3dDevice->Clear(0, NULL, D3DCLEAR_TARGET, 0, 1.0f, 0);
-            g_pd3dDevice->BeginScene();
-            g_effectFilterSpacing = GetFilterSpacingForLevel(level);
-            DrawFullscreenQuadCurrentRT(sourceTex, "Down3x3");
-            g_pd3dDevice->EndScene();
+    const float blend = (strongStageIndex == weakStageIndex) ? 1.0f : (stagePosition - (float)weakStageIndex);
+    const int weakActualStage = GetActualStageForIndex(weakStageIndex);
+    const int strongActualStage = GetActualStageForIndex(strongStageIndex);
 
-            sourceTex = g_texDown[level];
-        }
-    }
-
-    // Up チェーン
-    if (false)
-    {
-        IDirect3DSurface9* renderTarget = NULL;
-
-        // 最下段のコピー
-        int last = kNumLevels - 1;
-        g_texUp[last]->GetSurfaceLevel(0, &renderTarget);
-        g_pd3dDevice->SetRenderTarget(0, renderTarget);
-        SAFE_RELEASE(renderTarget);
-
-        g_pd3dDevice->Clear(0, NULL, D3DCLEAR_TARGET, 0, 1.0f, 0);
-        g_pd3dDevice->BeginScene();
-        DrawFullscreenQuadCurrentRT(g_texDown[last], "Copy");
-        g_pd3dDevice->EndScene();
-
-        // ひとつ上へ順次足し戻し
-        for (int level = last - 1; level >= 0; --level)
-        {
-            g_texUp[level]->GetSurfaceLevel(0, &renderTarget);
-            g_pd3dDevice->SetRenderTarget(0, renderTarget);
-            SAFE_RELEASE(renderTarget);
-
-            g_pEffect->SetTexture("g_SrcTex2", g_texDown[level]);
-
-            g_pd3dDevice->Clear(0, NULL, D3DCLEAR_TARGET, 0, 1.0f, 0);
-            g_pd3dDevice->BeginScene();
-            g_effectFilterSpacing = GetFilterSpacingForLevel(level);
-            DrawFullscreenQuadCurrentRT(g_texUp[level + 1], "UpsampleAdd3x3");
-            g_pd3dDevice->EndScene();
-        }
-    }
-
-    if (g_activeBlurLevels == 0)
-    {
-        DrawFullResolutionBlurTo(g_pTempTex);
-    }
-    else if (g_activeBlurLevels > 0 && g_compositeBlend < 1.0f)
-    {
-        IDirect3DSurface9* tempRT = NULL;
-        BuildUpChain(g_activeBlurLevels);
-        g_pTempTex->GetSurfaceLevel(0, &tempRT);
-        g_pd3dDevice->SetRenderTarget(0, tempRT);
-        SAFE_RELEASE(tempRT);
-        g_pd3dDevice->Clear(0, NULL, D3DCLEAR_TARGET, 0, 1.0f, 0);
-        g_pd3dDevice->BeginScene();
-        g_effectFilterSpacing = 1.0f;
-        DrawFullscreenQuadCurrentRT(g_texUp[0], "UpsampleOnly3x3");
-        g_pd3dDevice->EndScene();
-
-        if (g_activeBlurLevels > 1)
-        {
-            IDirect3DSurface9* weakRT = NULL;
-            BuildUpChain(g_activeBlurLevels - 1);
-            g_pWeakTex->GetSurfaceLevel(0, &weakRT);
-            g_pd3dDevice->SetRenderTarget(0, weakRT);
-            SAFE_RELEASE(weakRT);
-            g_pd3dDevice->Clear(0, NULL, D3DCLEAR_TARGET, 0, 1.0f, 0);
-            g_pd3dDevice->BeginScene();
-            g_effectFilterSpacing = 1.0f;
-            DrawFullscreenQuadCurrentRT(g_texUp[0], "UpsampleOnly3x3");
-            g_pd3dDevice->EndScene();
-        }
-        else
-        {
-            DrawFullResolutionBlurTo(g_pWeakTex);
-        }
-    }
-    else
-    {
-        BuildUpChain(g_activeBlurLevels);
-    }
+    RenderStageToTexture(weakActualStage, g_pWeakTex);
+    RenderStageToTexture(strongActualStage, g_pTempTex);
 
     // 最終出力
     {
@@ -431,24 +361,39 @@ void Render()
 
         g_pd3dDevice->Clear(0, NULL, D3DCLEAR_TARGET, 0, 1.0f, 0);
         g_pd3dDevice->BeginScene();
-        if (g_activeBlurLevels == 0)
-        {
-            DrawBlendCurrentRT(g_pSceneTex, g_pTempTex, g_compositeBlend);
-        }
-        else if (g_compositeBlend < 1.0f)
-        {
-            DrawBlendCurrentRT(g_pWeakTex, g_pTempTex, g_compositeBlend);
-        }
-        else
-        {
-            g_effectFilterSpacing = 1.0f;
-            DrawFullscreenQuadCurrentRT(g_texUp[0], "UpsampleOnly3x3");
-        }
+        DrawBlendCurrentRT(g_pWeakTex, g_pTempTex, blend);
         DrawOverlayText();
         g_pd3dDevice->EndScene();
     }
 
     g_pd3dDevice->Present(NULL, NULL, NULL, NULL);
+}
+
+void BuildDownChain(int levelCount)
+{
+    if (levelCount <= 0)
+    {
+        return;
+    }
+
+    IDirect3DSurface9* renderTarget = NULL;
+    LPDIRECT3DTEXTURE9 sourceTex = g_pSceneTex;
+
+    for (int level = 0; level < levelCount; ++level)
+    {
+        g_texDown[level]->GetSurfaceLevel(0, &renderTarget);
+        g_pd3dDevice->SetRenderTarget(0, renderTarget);
+        SAFE_RELEASE(renderTarget);
+
+        g_pd3dDevice->Clear(0, NULL, D3DCLEAR_TARGET, 0, 1.0f, 0);
+        g_pd3dDevice->BeginScene();
+        g_effectLevelCount = levelCount;
+        g_effectFilterSpacing = GetFilterSpacingForLevel(level);
+        DrawFullscreenQuadCurrentRT(sourceTex, "Down3x3");
+        g_pd3dDevice->EndScene();
+
+        sourceTex = g_texDown[level];
+    }
 }
 
 void BuildUpChain(int levelCount)
@@ -477,10 +422,25 @@ void BuildUpChain(int levelCount)
 
         g_pd3dDevice->Clear(0, NULL, D3DCLEAR_TARGET, 0, 1.0f, 0);
         g_pd3dDevice->BeginScene();
+        g_effectLevelCount = levelCount;
         g_effectFilterSpacing = GetFilterSpacingForLevel(level);
         DrawFullscreenQuadCurrentRT(g_texUp[level + 1], "UpsampleOnly3x3");
         g_pd3dDevice->EndScene();
     }
+}
+
+void DrawCopyTo(LPDIRECT3DTEXTURE9 sourceTex, LPDIRECT3DTEXTURE9 targetTex)
+{
+    IDirect3DSurface9* targetRT = NULL;
+    targetTex->GetSurfaceLevel(0, &targetRT);
+    g_pd3dDevice->SetRenderTarget(0, targetRT);
+    SAFE_RELEASE(targetRT);
+
+    g_pd3dDevice->Clear(0, NULL, D3DCLEAR_TARGET, 0, 1.0f, 0);
+    g_pd3dDevice->BeginScene();
+    g_effectFilterSpacing = 1.0f;
+    DrawFullscreenQuadCurrentRT(sourceTex, "Copy");
+    g_pd3dDevice->EndScene();
 }
 
 void DrawFullResolutionBlurTo(LPDIRECT3DTEXTURE9 targetTex)
@@ -495,6 +455,55 @@ void DrawFullResolutionBlurTo(LPDIRECT3DTEXTURE9 targetTex)
     g_effectFilterSpacing = g_filterSpacing;
     DrawFullscreenQuadCurrentRT(g_pSceneTex, "UpsampleOnly3x3");
     g_pd3dDevice->EndScene();
+}
+
+void DrawLowResBlurTo(int levelCount, LPDIRECT3DTEXTURE9 targetTex)
+{
+    BuildDownChain(levelCount);
+    BuildUpChain(levelCount);
+
+    IDirect3DSurface9* targetRT = NULL;
+    targetTex->GetSurfaceLevel(0, &targetRT);
+    g_pd3dDevice->SetRenderTarget(0, targetRT);
+    SAFE_RELEASE(targetRT);
+
+    g_pd3dDevice->Clear(0, NULL, D3DCLEAR_TARGET, 0, 1.0f, 0);
+    g_pd3dDevice->BeginScene();
+    g_effectFilterSpacing = 1.0f;
+    DrawFullscreenQuadCurrentRT(g_texUp[0], "UpsampleOnly3x3");
+    g_pd3dDevice->EndScene();
+}
+
+int GetAvailableStageCount()
+{
+    return 7 - g_skipBaseLevels;
+}
+
+int GetActualStageForIndex(int stageIndex)
+{
+    if (stageIndex <= 0)
+    {
+        return 0;
+    }
+
+    return stageIndex + g_skipBaseLevels;
+}
+
+void RenderStageToTexture(int actualStage, LPDIRECT3DTEXTURE9 targetTex)
+{
+    if (actualStage <= 0)
+    {
+        DrawCopyTo(g_pSceneTex, targetTex);
+        return;
+    }
+
+    if (actualStage == 1)
+    {
+        DrawFullResolutionBlurTo(targetTex);
+        return;
+    }
+
+    DrawLowResBlurTo(actualStage - 1, targetTex);
 }
 
 void DrawBlendCurrentRT(LPDIRECT3DTEXTURE9 baseTex, LPDIRECT3DTEXTURE9 blurTex, float blend)
@@ -530,12 +539,12 @@ void DrawBlendCurrentRT(LPDIRECT3DTEXTURE9 baseTex, LPDIRECT3DTEXTURE9 blurTex, 
 
 float GetFilterSpacingForLevel(int level)
 {
-    if (g_activeBlurLevels <= 0)
+    if (g_effectLevelCount <= 0)
     {
         return 1.0f;
     }
 
-    return (level == g_activeBlurLevels - 1) ? g_filterSpacing : 1.0f;
+    return (level == g_effectLevelCount - 1) ? g_filterSpacing : 1.0f;
 }
 
 void ApplyBlurStrength()
@@ -543,15 +552,21 @@ void ApplyBlurStrength()
     if (g_blurStrength < 0) { g_blurStrength = 0; }
     if (g_blurStrength > 96) { g_blurStrength = 96; }
 
-    if (g_blurStrength == 96)
-    {
-        g_activeBlurLevels = kNumLevels;
-        g_compositeBlend = 1.0f;
-        return;
-    }
+    const int availableStageCount = GetAvailableStageCount();
+    const float stagePosition = ((float)g_blurStrength / 96.0f) * (float)(availableStageCount - 1);
+    int weakStageIndex = (int)stagePosition;
+    if (weakStageIndex < 0) { weakStageIndex = 0; }
+    if (weakStageIndex > availableStageCount - 1) { weakStageIndex = availableStageCount - 1; }
 
-    g_activeBlurLevels = g_blurStrength / 16;
-    g_compositeBlend = (float)(g_blurStrength % 16) / 16.0f;
+    int strongStageIndex = weakStageIndex + 1;
+    if (strongStageIndex > availableStageCount - 1) { strongStageIndex = availableStageCount - 1; }
+
+    const int weakActualStage = GetActualStageForIndex(weakStageIndex);
+    const int strongActualStage = GetActualStageForIndex(strongStageIndex);
+
+    g_compositeBlend = (strongStageIndex == weakStageIndex) ? 1.0f : (stagePosition - (float)weakStageIndex);
+    g_activeBlurLevels = strongActualStage - 1;
+    if (g_activeBlurLevels < 0) { g_activeBlurLevels = 0; }
 }
 
 void UpdateInput()
@@ -568,8 +583,13 @@ void UpdateInput()
     const bool key6 = (GetAsyncKeyState('6') & 0x8000) != 0;
     const bool key7 = (GetAsyncKeyState('7') & 0x8000) != 0;
     const bool key8 = (GetAsyncKeyState('8') & 0x8000) != 0;
+    const bool keyF1 = (GetAsyncKeyState(VK_F1) & 0x8000) != 0;
+    const bool keyF2 = (GetAsyncKeyState(VK_F2) & 0x8000) != 0;
+    const bool keyF3 = (GetAsyncKeyState(VK_F3) & 0x8000) != 0;
+    const bool keyF4 = (GetAsyncKeyState(VK_F4) & 0x8000) != 0;
 
-    if (!key1 && !key2 && !key3 && !key4 && !key5 && !key6 && !key7 && !key8)
+    if (!key1 && !key2 && !key3 && !key4 && !key5 && !key6 && !key7 && !key8 &&
+        !keyF1 && !keyF2 && !keyF3 && !keyF4)
     {
         lastInputTime = 0;
         return;
@@ -612,6 +632,22 @@ void UpdateInput()
     {
         ++g_blurStrength;
     }
+    if (keyF1)
+    {
+        g_skipBaseLevels = 0;
+    }
+    if (keyF2)
+    {
+        g_skipBaseLevels = 1;
+    }
+    if (keyF3)
+    {
+        g_skipBaseLevels = 2;
+    }
+    if (keyF4)
+    {
+        g_skipBaseLevels = 3;
+    }
 
     if (g_filterSpacing < 0.0f) { g_filterSpacing = 0.0f; }
     if (g_filterSpacing > 1.0f) { g_filterSpacing = 1.0f; }
@@ -627,12 +663,13 @@ void DrawOverlayText()
 
     TCHAR text[256] = {};
     _stprintf_s(text,
-                _T("1/2, 5/6: deepest spacing -/+\n3/4: blur strength +/- 16\n7/8: blur strength -/+\ndeepest 3x3 spacing: %.2f\nblur strength: %d / 96\nblend: %.2f\nblur levels: %d / %d"),
+                _T("1/2, 5/6: deepest spacing -/+\n3/4: blur strength +/- 16\n7/8: blur strength -/+\nF1: all, F2: no 1/1, F3: no 1/1+1/2, F4: no 1/1+1/2+1/4\ndeepest 3x3 spacing: %.2f\nblur strength: %d / 96\nblend: %.2f\nstrong level: %d / %d\nskip base levels: %d"),
                 g_filterSpacing,
                 g_blurStrength,
                 g_compositeBlend,
                 g_activeBlurLevels,
-                kNumLevels);
+                kNumLevels,
+                g_skipBaseLevels);
 
     RECT shadowRect = { 17, 17, WINDOW_SIZE_W, WINDOW_SIZE_H };
     RECT textRect = { 16, 16, WINDOW_SIZE_W, WINDOW_SIZE_H };
